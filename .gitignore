@@ -1,11 +1,8 @@
 # Trzymaj lokalnie sekrety i artefakty testów pCloud (bilet „Testy empiryczne pCloud")
-.scratch/pcloud-tests/secrets/*
-!.scratch/pcloud-tests/secrets/app.env.template
-.scratch/pcloud-t7/secrets/*
-.scratch/pcloud-tests/logs/
-.scratch/pcloud-tests/out/
+.scratch
 
 # Tymczasowe pliki robocze
 *.tmp
 
 .playwright-mcp
+.env
