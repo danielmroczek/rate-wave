@@ -49,6 +49,7 @@ Confirmed (from spec + research, empirically verified 2026-10-27/28):
 - Name: **rate-wave** (pCloud app registered under it, `client_id=8imNt7HXdPm`, 2026-10-30). Working predecessor name "music-rater" survives only in the frozen artifacts listed above.
 - UI language for MVP: **English** — all labels, placeholders, dialogs, messages, `aria-*`, PWA metadata; project docs stay Polish.
 - Visual directive from spec §5: **FLAT/METRO, borderless** — hierarchy exclusively by background layers, hover, list zebra, full-background selection; no 1 px borders; focus = outline fill.
+- Copy tone (binding, 2026-10-30): no marketing taglines, no roadmap/ticket references or build-status copy in UI text, no decorative em-dash pairs around placeholder text; UI states speak plainly ("Nothing selected", "Not connected yet — …").
 
 ## Evidence on Hand
 

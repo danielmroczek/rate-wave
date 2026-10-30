@@ -17,7 +17,7 @@
   <body>
     <div id="app">
       <header id="topbar">
-        <h1>rate-wave <small>ratings in MP3 tags</small></h1>
+        <h1>rate-wave</h1>
       </header>
 
       <div id="toolbar">
@@ -30,26 +30,20 @@
           aria-label="Search by name"
         />
         <span id="count" class="hint">0 items</span>
-        <button id="btn-reset" type="button" class="btn ghost danger">
-          Clear all data…
-        </button>
+        <button id="btn-reset" type="button" class="btn ghost danger">Clear all data…</button>
       </div>
 
       <main id="viewport" tabindex="0">
         <div id="empty-state" class="empty">
           <p>
-            <strong>empty</strong> — the library arrives in upcoming tickets (pCloud listing,
-            ticket 04).
-          </p>
-          <p class="hint">
-            Foundation ready: PWA shell + IndexedDB <code>rate-wave</code> v1 database.
+            <strong>Not connected yet</strong> — your library appears here once you sign in to
+            pCloud or open a local folder.
           </p>
         </div>
       </main>
 
       <section id="player" aria-label="Player">
-        <div id="ptitle">— nothing selected —</div>
-        <div class="hint">transport / stars / waveform: tickets 05–09</div>
+        <div id="ptitle">Nothing selected</div>
       </section>
     </div>
 
@@ -57,8 +51,8 @@
       <h2>Clear all data?</h2>
       <p>
         This deletes the local <code>rate-wave</code> IndexedDB database and all
-        <code>localStorage</code> data (including the pCloud token). Files on pCloud are not
-        touched — ratings stored in tags remain on the server.
+        <code>localStorage</code> data (including the pCloud token). Files on pCloud are not touched
+        — ratings stored in tags remain on the server.
       </p>
       <menu>
         <button id="dlg-cancel" class="btn ghost" type="button">Cancel</button>

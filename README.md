@@ -49,14 +49,14 @@ Open `http://localhost:5173/` and connect a music source.
 
 ### Commands
 
-| Command                        | What it does                                                |
-| ------------------------------ | ----------------------------------------------------------- |
-| `npm run dev`                  | dev server (Vite+, HMR)                                     |
-| `npm run build`                | production build → `dist/` (static, `base: /rate-wave/`)    |
-| `npm run preview`              | preview the production build                                |
-| `npm test`                     | tests (Vitest; IDB schema on `fake-indexeddb`)              |
-| `npm run check`                | format + lint + type-check (oxfmt/oxlint)                   |
-| `npm run fmt` / `npm run lint` | individual steps                                            |
+| Command                        | What it does                                             |
+| ------------------------------ | -------------------------------------------------------- |
+| `npm run dev`                  | dev server (Vite+, HMR)                                  |
+| `npm run build`                | production build → `dist/` (static, `base: /rate-wave/`) |
+| `npm run preview`              | preview the production build                             |
+| `npm test`                     | tests (Vitest; IDB schema on `fake-indexeddb`)           |
+| `npm run check`                | format + lint + type-check (oxfmt/oxlint)                |
+| `npm run fmt` / `npm run lint` | individual steps                                         |
 
 ## Project structure
 
