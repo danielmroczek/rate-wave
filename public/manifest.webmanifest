@@ -1,7 +1,7 @@
 {
   "name": "rate-wave",
   "short_name": "rate-wave",
-  "description": "Słuchaj i oceniaj nagrania dyktafonowe; oceny zapisywane w tagach MP3 (POPM).",
+  "description": "Listen and rate recordings on a five-star scale; ratings stored in MP3 tags (POPM).",
   "start_url": "/rate-wave/",
   "scope": "/rate-wave/",
   "display": "standalone",

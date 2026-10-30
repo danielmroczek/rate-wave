@@ -8,11 +8,11 @@ async function boot() {
   try {
     const db = await openDB();
     const trackCount = (await getAllKeys(db, STORES.TRACKS)).length;
-    document.getElementById("count").textContent = `${trackCount} pozycji`;
+    document.getElementById("count").textContent = `${trackCount} items`;
     window.__waveRateDB = db; // kolejne bilety (list/player) przejmą to jawnie
   } catch (err) {
     console.error("openDB failed", err);
-    document.getElementById("count").textContent = "baza niedostępna";
+    document.getElementById("count").textContent = "database unavailable";
   }
 
   // 2. „Wyczyść wszystkie dane": deleteDB + localStorage.clear() z potwierdzeniem.

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pl">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#0f1115" />
     <meta
       name="description"
-      content="rate-wave — słuchaj i oceniaj nagrania dyktafonowe; oceny zapisywane w tagach MP3 (POPM)."
+      content="rate-wave — listen and rate recordings on a five-star scale; ratings stored in MP3 tags (POPM)."
     />
     <link rel="icon" href="%BASE_URL%icons/favicon.svg" type="image/svg+xml" />
     <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
@@ -17,7 +17,7 @@
   <body>
     <div id="app">
       <header id="topbar">
-        <h1>rate-wave <small>oceny w tagach MP3</small></h1>
+        <h1>rate-wave <small>ratings in MP3 tags</small></h1>
       </header>
 
       <div id="toolbar">
@@ -25,44 +25,44 @@
         <input
           id="q"
           type="search"
-          placeholder="Szukaj po nazwie…"
+          placeholder="Search by name…"
           disabled
-          aria-label="Szukaj po nazwie"
+          aria-label="Search by name"
         />
-        <span id="count" class="hint">0 pozycji</span>
+        <span id="count" class="hint">0 items</span>
         <button id="btn-reset" type="button" class="btn ghost danger">
-          Wyczyść wszystkie dane…
+          Clear all data…
         </button>
       </div>
 
       <main id="viewport" tabindex="0">
         <div id="empty-state" class="empty">
           <p>
-            <strong>pusto</strong> — biblioteka dołączy w kolejnych biletach (pCloud listing, bilet
-            04).
+            <strong>empty</strong> — the library arrives in upcoming tickets (pCloud listing,
+            ticket 04).
           </p>
           <p class="hint">
-            Fundament gotowy: shell PWA + baza IndexedDB <code>rate-wave</code> v1.
+            Foundation ready: PWA shell + IndexedDB <code>rate-wave</code> v1 database.
           </p>
         </div>
       </main>
 
       <section id="player" aria-label="Player">
-        <div id="ptitle">— nic nie zaznaczono —</div>
-        <div class="hint">transport / gwiazdki / waveform: bilety 05–09</div>
+        <div id="ptitle">— nothing selected —</div>
+        <div class="hint">transport / stars / waveform: tickets 05–09</div>
       </section>
     </div>
 
     <dialog id="dlg-reset">
-      <h2>Wyczyścić wszystkie dane?</h2>
+      <h2>Clear all data?</h2>
       <p>
-        Usunie lokalną bazę <code>rate-wave</code> (IndexedDB) i wszystkie dane w
-        <code>localStorage</code> (m.in. token pCloud). Plików na pCloud to nie dotyka — oceny w
-        tagach zostają na serwerze.
+        This deletes the local <code>rate-wave</code> IndexedDB database and all
+        <code>localStorage</code> data (including the pCloud token). Files on pCloud are not
+        touched — ratings stored in tags remain on the server.
       </p>
       <menu>
-        <button id="dlg-cancel" class="btn ghost" type="button">Anuluj</button>
-        <button id="dlg-confirm" class="btn danger" type="button">Wyczyść</button>
+        <button id="dlg-cancel" class="btn ghost" type="button">Cancel</button>
+        <button id="dlg-confirm" class="btn danger" type="button">Clear</button>
       </menu>
     </dialog>
   </body>
