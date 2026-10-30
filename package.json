@@ -1,0 +1,22 @@
+{
+  "name": "rate-wave",
+  "version": "0.1.0",
+  "private": true,
+  "description": "rate-wave — ocenianie ~3635 nagrań dyktafonowych MP3 (POPM ID3), źródła: pCloud + FSA. Statyczna PWA, zero backendu.",
+  "type": "module",
+  "scripts": {
+    "prepare": "vp config",
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "test": "vp test",
+    "lint": "vp lint",
+    "fmt": "vp fmt",
+    "check": "vp check"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.7",
+    "vite-plus": "^1.4.0"
+  },
+  "packageManager": "npm@10.9.8"
+}
