@@ -1,12 +1,12 @@
 /* rate-wave — Service Worker: app-shell cache (spec §7, bilet 01).
    Żyje w public/ → kopiowany 1:1 do dist/sw.js przez Vite (klasyczny SW, bez bundlowania).
-   Strategia: precache nawigacji + manifest; hashowane /assets/* → cache-first (immutable);
-   nawigacja → network-first z fallbackiem (żeby deploy podmieniał shell). */
+   Strategia: precache HTML/JS/CSS + manifest build-time; hashowane /assets/* → cache-first
+   (immutable); nawigacja → network-first z fallbackiem (żeby deploy podmieniał shell). */
 
 const CACHE = "rate-wave-shell-v1"; // wersjonowany — bump przy zmianie strategii
 
-// Precache build-time: lista podmieniana wtyczką Vite (vite.config.js) na realne,
-// hashowane nazwy assetów emitowanych do dist/assets/. Build-time, nie runtime.
+// Lista URL-i do precache podmieniana build-time wtyczką injectPrecache
+// (vite.config.js): emitowane .html (index + oauth) + hashowane .js/.css.
 const PRECACHE_URLS = __PRECACHE_URLS__;
 
 self.addEventListener("install", (event) => {
