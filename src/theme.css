@@ -43,15 +43,28 @@ body {
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  max-width: 760px;
-  margin: 0 auto;
+  /* dashboard: cała dostępna szerokość; rytm tekstu pilnuje padding, nie cap */
+  /* --pad: ciasno na mobile, swobodnie na desktopie */
+  --pad: 12px;
+}
+
+@media (min-width: 768px) {
+  #app {
+    --pad: 24px;
+  }
+}
+
+@media (min-width: 1280px) {
+  #app {
+    --pad: 32px;
+  }
 }
 
 /* ── warstwy: topbar / toolbar / viewport / player ─────────── */
 
 #topbar {
   background: var(--bg2);
-  padding: 10px 12px 8px;
+  padding: 10px var(--pad) 8px;
 }
 
 #topbar h1 {
@@ -75,18 +88,31 @@ body {
   gap: 8px;
   align-items: center;
   background: var(--bg2);
-  padding: 8px 12px;
+  padding: 8px var(--pad);
+}
+
+/* desktop: szukajka rozciąga się do capu, reszta trzyma prawy brzeg */
+@media (min-width: 768px) {
+  #q {
+    font-size: 15px;
+  }
 }
 
 #q {
   flex: 1;
   min-width: 40%;
+  max-width: 560px; /* czytelna miara; nadwyżka przestrzeni zostaje po prawej */
   background: var(--bg3);
   color: var(--tx);
   border: 0;
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 14px;
+}
+
+/* desktop: licznik przyklejony do prawego brzegu, wg[g] (hierarchia przez gap) */
+#count {
+  margin-left: auto;
 }
 
 #q:focus {
@@ -109,7 +135,7 @@ body {
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 12px;
+  padding: var(--pad);
 }
 
 .empty {
@@ -146,7 +172,7 @@ p code {
 
 #player {
   background: var(--bg2);
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  padding: 10px var(--pad) calc(10px + env(safe-area-inset-bottom));
 }
 
 #ptitle {
