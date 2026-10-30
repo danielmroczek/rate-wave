@@ -113,6 +113,8 @@ Aplikacja korzysta z tych potwierdzonych faktów (raport `research/pcloud-api.md
 
 **Dyrektywa graficzna:** hierarchia wyłącznie **tłem** (warstwy, hover, zebra listy, zaznaczenie pełnym tłem); **żadnych ramek 1 px**; focus = dopełnienie (outline), nie ramka; toolbar mobile **zawija się**.
 
+**Język UI — MVP po angielsku** (decyzja 2026-10-30): całe UI widoczne dla użytkownika — etykiety, placeholdery, dialogi, komunikaty, atrybuty `aria-*`, metadane PWA (manifest `description`, `<meta name="description">`, `lang="en"` w `index.html`/`oauth.html`) — jest po **angielsku**. Nie dotyczy dokumentacji projektowej: ta specyfikacja, bilety i research pozostają po polsku. Uwaga praktyczna: string runtime'owy licznika żyje też w `src/main.js` (`"N items"`), nie tylko w HTML.
+
 ### 5a. Layout
 
 - **Drzewko Roczników po lewej** (desktop; mobile zawinięte/pionowe): klik = filtr, wariant „wszystkie"; aktywny podświetlony pełnym tłem; roczniki widoczne zawsze, nawet puste [bilet 17].
