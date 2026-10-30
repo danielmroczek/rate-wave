@@ -1,7 +1,9 @@
-# music-rater — specyfikacja budowalna
+# rate-wave — specyfikacja budowalna
 
 **Status:** WERSJA WSTĘPNA (draft v0.1, 2026-10-29) — generowana przez agenta z decyzji mapy; do przeglądu HITL przed budową.
-**Źródło prawdy:** bilety w `.scratch/music-rater-target/issues/` + raporty w `research/`. Ta specyfikacja **streszcza** — w razie rozbieżności bilety wygrywają. Glosariusz pojęć: [CONTEXT.md](CONTEXT.md) (Utwór, Źródło, Ocena, Cache ocen, Fingerprint, Walidacja per-odczyt, Sesja, Pełny powrót, LWW, Rocznik, Ostatnio słuchane).
+**Źródło prawdy:** bilety w GitHub Issues (repo danielmroczek/rate-wave — patrz AGENTS.md) + raporty w research/. Ta specyfikacja **streszcza** — w razie rozbieżności bilety wygrywają. Glosariusz pojęć: [CONTEXT.md](CONTEXT.md) (Utwór, Źródło, Ocena, Cache ocen, Fingerprint, Walidacja per-odczyt, Sesja, Pełny powrót, LWW, Rocznik, Ostatnio słuchane).
+
+> **Zmiana nazwy 2026-10-30:** projekt — wcześniej roboczo „music-rater" — nosi nazwę **rate-wave** (patrz CONTEXT.md); baza IDB i moduły używają już finalnej nazwy. Stare odwołania w research/ to zapisy stanu z okresu testów.
 
 ---
 
@@ -86,7 +88,7 @@ Aplikacja korzysta z tych potwierdzonych faktów (raport `research/pcloud-api.md
 
 **Walidacja per-odczyt bez TTL.** Token pCloud w `localStorage` **i** mirror w IDB (żeby Service Worker / flush mógł działać — SW nie widzi localStorage) [bilet 15].
 
-### 4a. Baza `music-rater` (version 1)
+### 4a. Baza `rate-wave` (version 1)
 
 | store | klucz | payload | uwagi |
 |---|---|---|---|

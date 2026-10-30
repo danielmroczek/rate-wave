@@ -29,7 +29,7 @@ oauth.html            — statyczna strona-docelowa OAuth pCloud (stub; logika: 
 public/
   manifest.webmanifest — PWA (standalone, ikona SVG)
   sw.js               — Service Worker app-shell (precache build-time: HTML+manifest+hashowane assets)
-  icons/              — favicon.svg (tabler-icons 'waveform'; https://tabler.io/icons)
+  icons/              — favicon.svg (tabler 'waveform') + icon-192/512.png (generator: scripts/make-pwa-icons.mjs)
 src/
   main.js             — boot: openDB, licznik, reset danych, rejestracja SW
   theme.css           — FLAT/METRO: warstwy tła, zebra, zero ramek, focus=outline
@@ -46,6 +46,6 @@ Store'y (klucze out-of-line): `settings`, `sources`, `library`, `tracks` (`'pclo
 
 ## Deploy (GitHub Pages)
 
-Build-output `dist/` z `base: '/rate-wave/'` → katalog `docs` nie; docelowo GitHub Actions `vp build` → Pages. (Konfiguracja Actions: osobny krok.)
+Po każdym pushu na `main` workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) buduje appkę i deployuje `dist/` na Pages (są też przycisk `workflow_dispatch`; `npm ci` → `npm run build`). Jednorazowo włączyć w repo: **Settings → Pages → Source → „GitHub Actions"**. Adres: `https://danielmroczek.github.io/rate-wave/`.
 
 ⚠ **Konflikt redirect_uri do rozstrzygnięcia (HITL, przed biletem 03):** whitelist pCloud (zweryfikowana T6) ma zarejestrowany prod `https://danielmroczek.github.io/rate-wave/oauth.html` (exact string match), a Pages tego repo servuje `/rate-wave/`. W portalu pCloud trzeba dodać `…/rate-wave/oauth.html` do whitelist (badania: `docs/research/pcloud-register-app.md`).
