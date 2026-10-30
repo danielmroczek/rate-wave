@@ -6,3 +6,7 @@
 
 .playwright-mcp
 .env
+
+# Build + zależności (Vite+)
+dist/
+node_modules/
