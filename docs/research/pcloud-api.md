@@ -25,7 +25,8 @@ Ticket: `.scratch/music-rater-target/issues/02-pcloud-api.md`
 ### Rejestracja aplikacji
 - Portal developerów to **`https://docs.pcloud.com/my_apps/`** (wymaga zalogowania kontem pCloud; strona logowania się renderuje — nie dało się zweryfikować dokładnych pól formularza). Odnośnik „My Apps” jest widoczny w menu każdej strony docs.pcloud.com. Rejestracja daje `client_id` (public) oraz `app_secret`. Adres `https://developers.pcloud.com/` zwrócił 404 — jedynym działającym portalem jest `docs.pcloud.com/my_apps/`.
 - Dokumentacja OAuth indeks: `https://docs.pcloud.com/methods/oauth_2.0/` — tylko dwie metody: `authorize` i `oauth2_token`.
-- ❗ Niezweryfikowane: czy pCloud wymaga rejestracji whitelisty `redirect_uri` przy tworzeniu aplikacji i jakie wartości akceptuje (dokumentacja milczy). Do testu po założeniu appki.
+- **Nasza zarejestrowana appka (2026-10-30):** „rate-wave", `client_id=8imNt7HXdPm`, `app_id: 27460`, `folderaccess: "full"`, `writeaccess: true`, `allowimplicitgrant: true` (wyczytane z ekranu zgody OAuth; secret tylko w lokalnym nie-trackowanym `.env`).
+- **Whitelist redirectów — zweryfikowana testem T6 (PASS):** zarejestrowane i zaakceptowane: `http://localhost:5173/` (dev) + `https://danielmroczek.github.io/rate-wave/oauth.html` (prod — działa **zanim** GH Pages cokolwiek serwuje; walidacja server-side, nie sięga do docelowego URL). Dopasowanie = **exact string match** (root subpath `/rate-wave/`, wariant `rate-wave`, brak slasha, `127.0.0.1`, inny port → `redirect_uri is not autorized`). Szczegóły i pełne tabele: `research/pcloud-register-app.md` §T6.
 
 ### Flow autoryzacji
 Źródło: [authorize](https://docs.pcloud.com/methods/oauth_2.0/authorize.html).

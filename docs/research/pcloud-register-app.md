@@ -191,3 +191,51 @@ Po wykonaniu: bilet `11` przejmuje T3–T6 (curl testy) z nowym `client_id`; fal
 
 - SOLID: dokumentacja `authentication.html` (globalne parametry loginu, `getauth`, digest, `auth=`), `getdigest` (30 s), `userinfo` (błędy 2000/4000), token flow (obowiązkowy redirect, fragment), SDK przykłady z `client_id` + redirect, PyPI pcloud (redirect przy rejestracji, localhost-port dowolny), cloudbrowser issue (dowód śmierci cudzego client_id), SDK `initOauthPollToken` (redirect-less).
 - SŁABE / do T6: dokładny wygląd i wymagania formularza My Apps (za loginem — ograniczenie zaznaczone), edytowalność redirectów po utworzeniu, dopasowanie redirectu (exact vs prefix), liczba redirectów na appce.
+
+---
+
+## T6 — testy live `/oauth2/authorize` (2026-10-30)
+
+Kontekst: appka zarejestrowana („rate-wave", `client_id=8imNt7HXdPm`, `app_id: 27460`, `allowimplicitgrant: true` — wyczytane z ekranu zgody OAuth). Testy z CLI (`curl.exe`), bez sesji przeglądarkowej. Endpoint zwraca **HTTP 200 + HTML** z komunikatem w `div.alert-box` (nie 302, nie JSON).
+
+### Rozróżnienie komunikatów pCloud (diagnostyka)
+
+| warunek | komunikat pCloud |
+| --- | --- |
+| brak `response_type` | `Need to provide 'response_type'.` |
+| `response_type=token` bez `redirect_uri` | `Need to provide 'redirect_uri', when using 'token' 'response_type'.` |
+| nieistniejący `client_id` (`bogus123`) | `Invalid 'client_id'.` |
+| poprawny `client_id` + redirect spoza whitelisty | `This 'redirect_uri' is not autorized.` |
+
+### Faza 1 — whitelist pusta (przed dodaniem redirectów)
+
+| `redirect_uri` | wynik |
+| --- | --- |
+| `http://localhost:5173/` (i bez slasha, `127.0.0.1`, inny port) | ❌ not autorized |
+| `https://danielmroczek.github.io/rate-wave/...` (root, subpath, oauth.html) | ❌ not autorized |
+| `http://evil.example.com/` (kontrola negatywna) | ❌ not autorized |
+
+Wniosek: pCloud nie ma domyślnego redirectu; walidacja następuje **przed logowaniem** (komunikat widać bez sesji).
+
+### Faza 2 — po dodaniu `http://localhost:5173/` w portalu (HITL)
+
+| `redirect_uri` | wynik |
+| --- | --- |
+| `http://localhost:5173/` | ✅ ekran „Sign in with pCloud" |
+| `http://localhost:5173` (bez slasha) | ❌ not autorized |
+| `http://127.0.0.1:5173/` | ❌ not autorized |
+| pozostałe (jak faza 1) | ❌ not autorized |
+
+**Rozstrzygnięcia:** dopasowanie = **exact string match** (slash/host/port istotne); portal obsługuje **listę** redirectów; edycja appki po utworzeniu działa natychmiast.
+
+### Faza 3 — finalna (po dodaniu prod redirectu 2026-10-30)
+
+| `redirect_uri` | wynik |
+| --- | --- |
+| `http://localhost:5173/` (dev) | ✅ Sign in with pCloud |
+| `https://danielmroczek.github.io/rate-wave/oauth.html` (prod) | ✅ Sign in with pCloud |
+| `https://danielmroczek.github.io/rate-wave/` (root) | ❌ not autorized |
+| `https://danielmroczek.github.io/rate-wave/oauth.html` | ❌ not autorized |
+| `http://evil.example.com/` | ❌ not autorized |
+
+Ważne: prod redirect zaakceptowany **zanim** GH Pages cokolwiek serwuje — walidacja whitelist jest czysto server-side i nie sięga do docelowego URL-a. **T6 = PASS, AC z biletu 02 domknięte** (dev + prod oba zaakceptowane).
