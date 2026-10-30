@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- Statyczna strona-docelowa OAuth pCloud (implicit flow, response_type=token).
+     Stub zgodny z biletem 01 — pełna logika parsowania fragmentu, walidacji `state`
+     i przekazania tokenu do appki przychodzi w bilecie 03.
+
+     Prod redirect: https://danielmroczek.github.io/rate-wave/oauth.html  -->
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>rate-wave — OAuth</title>
+    <style>
+      /* Kolory = mirror :root z src/theme.css (strona odizolowana od bundla — spec §1a) */
+      body {
+        background: #0f1115;
+        color: #e8ecf3;
+        font:
+          15px/1.45 system-ui,
+          sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100dvh;
+        margin: 0;
+      }
+      .box {
+        background: #171a21;
+        border-radius: 12px;
+        padding: 24px;
+        max-width: 420px;
+        text-align: center;
+      }
+      .hint {
+        color: #9aa4b5;
+        font-size: 12px;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="box">
+      <h1>rate-wave</h1>
+      <p>Punkt docelowy logowania pCloud.</p>
+      <p class="hint">
+        Token i walidacja <code>state</code>: bilet 03. Jeśli tu trafiłeś przed jego wdrożeniem,
+        wróć do aplikacji i spróbuj ponownie po aktualizacji.
+      </p>
+    </main>
+  </body>
+</html>
