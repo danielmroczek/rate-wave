@@ -27,9 +27,9 @@ Specyfikacja: [`docs/spec.md`](docs/spec.md) · Glosariusz: [`docs/CONTEXT.md`](
 index.html            — shell FLAT/METRO (topbar/toolbar/viewport/player)
 oauth.html            — statyczna strona-docelowa OAuth pCloud (stub; logika: bilet 03)
 public/
-  manifest.webmanifest — PWA (standalone, ikony 192/512 maskable)
+  manifest.webmanifest — PWA (standalone, ikona SVG)
   sw.js               — Service Worker app-shell (precache build-time: HTML+manifest+hashowane assets)
-  icons/              — SVG + PNG (generator: scripts/make-icons.mjs)
+  icons/              — favicon.svg (tabler-icons 'waveform'; https://tabler.io/icons)
 src/
   main.js             — boot: openDB, licznik, reset danych, rejestracja SW
   theme.css           — FLAT/METRO: warstwy tła, zebra, zero ramek, focus=outline

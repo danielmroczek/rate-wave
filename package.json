@@ -15,6 +15,7 @@
     "check": "vp check"
   },
   "devDependencies": {
+    "@tabler/icons": "^3.50.0",
     "fake-indexeddb": "^6.2.7",
     "vite-plus": "^1.4.0"
   },
