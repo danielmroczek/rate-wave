@@ -1,4 +1,11 @@
-# music-rater — kontekst aplikacji oceniania
+# rate-wave — kontekst aplikacji oceniania
+
+> **Zmiana nazwy 2026-10-30.** Projekt wcześniej nosił roboczą nazwę **music-rater**; pCloud appka („rate-wave", `client_id=8imNt7HXdPm`) zarejestrowana pod finalną nazwą, ale niektóre artefakty rzeczywiste **zachowały starą nazwę i nie podlegają rename**:
+> - POPM owner `music-rater@local` zapisany w tagach plików testowych podczas T3–T7 (raz zapisany w MP3 = trwały identyfikator) — nowy owner dla docelowej wersji: **`rate-wave@local`**;
+> - katalog `music-rater-test` na koncie pCloud (istnieje pod tą nazwą);
+> - schowki `.scratch/music-rater-target/` (gitignored archiwum robocze, przemianowane na `.scratch/rate-wave-target/`).
+>
+> To zapisy stanu rzeczywistego z okresu testów, nie literówka. Kontekst owner-policy: `research/sample-file-tag-audit.md`.
 
 Aplikacja służy do słuchania i oceniania jednej bazy nagrań dyktafonowych (ok. 3000 MP3). Katalog terminów używanych w decyzjach i specyfikacji.
 
