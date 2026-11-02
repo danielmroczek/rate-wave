@@ -1,9 +1,12 @@
 <!doctype html>
 <!-- Statyczna strona-docelowa OAuth pCloud (implicit flow, response_type=token).
-     Stub zgodny z biletem 01 — pełna logika parsowania fragmentu, walidacji `state`
-     i przekazania tokenu do appki przychodzi w bilecie 03.
+     Bilet 03: parsuje token/hostname/locationid z fragmentu, waliduje state (anty-CSRF),
+     przekazuje do appki przez postMessage + localStorage + IDB mirror, czyści fragment z URL.
 
-     Prod redirect: https://danielmroczek.github.io/rate-wave/oauth.html  -->
+     Prod redirect: https://danielmroczek.github.io/rate-wave/oauth.html
+     Dev redirect:  http://localhost:5173/ (→ trafia na index.html, nie tę stronę)
+
+     Logika w src/auth/oauth-page.js (Vite bundluje ten wpis jako multi-page entry). -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -11,7 +14,6 @@
     <meta name="referrer" content="no-referrer" />
     <title>rate-wave — OAuth</title>
     <style>
-      /* Kolory = mirror :root z src/theme.css (strona odizolowana od bundla — spec §1a) */
       body {
         background: #0f1115;
         color: #e8ecf3;
@@ -36,15 +38,17 @@
         font-size: 12px;
         margin-top: 10px;
       }
+      .error {
+        color: #ff5d5d;
+      }
     </style>
   </head>
   <body>
-    <main class="box">
+    <main class="box" id="status">
       <h1>rate-wave</h1>
-      <p>Signed in to pCloud — you can return to the app.</p>
-      <p class="hint">
-        This page will hand the session back to the app automatically once sign-in handling ships.
-      </p>
+      <p id="msg">Signing in to pCloud…</p>
+      <p class="hint" id="detail"></p>
     </main>
+    <script type="module" src="/src/auth/oauth-page.js"></script>
   </body>
 </html>
