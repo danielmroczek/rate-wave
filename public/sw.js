@@ -7,7 +7,8 @@ const CACHE = "rate-wave-shell-v1"; // wersjonowany — bump przy zmianie strate
 
 // Lista URL-i do precache podmieniana build-time wtyczką injectPrecache
 // (vite.config.js): emitowane .html (index + oauth) + hashowane .js/.css.
-const PRECACHE_URLS = __PRECACHE_URLS__;
+// typeof chroni przed ReferenceError w dev (__PRECACHE_URLS__ podmieniane tylko build-time)
+const PRECACHE_URLS = typeof __PRECACHE_URLS__ !== "undefined" ? __PRECACHE_URLS__ : [];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
