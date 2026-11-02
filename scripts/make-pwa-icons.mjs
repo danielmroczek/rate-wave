@@ -55,7 +55,11 @@ function render(size) {
       }
       cov[y * size + x] = hit / (ss * ss);
       // gradient odpowiada rect fill (x1 15% y1 15% → x2 85% y2 85%)
-      const t = Math.min(1, Math.max(0, (px(x, size) + py(y, size)) / (2 * size)));
+      const svgX = px(x, size), svgY = py(y, size);
+      const gX1 = 0.15 * S, gY1 = 0.15 * S, gX2 = 0.85 * S, gY2 = 0.85 * S;
+      const gLen2 = (gX2 - gX1) ** 2 + (gY2 - gY1) ** 2 || 1;
+      const t = Math.min(1, Math.max(0,
+        ((svgX - gX1) * (gX2 - gX1) + (svgY - gY1) * (gY2 - gY1)) / gLen2));
       const c = lerp(hex(grad[0]), hex(grad[1]), t);
       col[(y * size + x) * 3] = c[0];
       col[(y * size + x) * 3 + 1] = c[1];
@@ -190,7 +194,7 @@ function png(img) {
   ]);
 }
 
-for (const size of [192, 512]) {
+for (const size of [64, 192, 512]) {
   const out = join(here, "..", "public", "icons", `icon-${size}.png`);
   writeFileSync(out, png(render(size)));
   console.log("written", out);
