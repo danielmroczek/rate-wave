@@ -9,8 +9,8 @@
       name="description"
       content="rate-wave — listen and rate recordings on a five-star scale; ratings stored in MP3 tags (POPM)."
     />
-    <link rel="icon" href="%BASE_URL%icons/favicon.svg" type="image/svg+xml" />
-    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <link rel="icon" href="icons/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="manifest.webmanifest" />
     <title>rate-wave</title>
     <script type="module" src="/src/main.js"></script>
   </head>
@@ -34,7 +34,14 @@
       </div>
 
       <main id="viewport" tabindex="0">
-        <div id="empty-state" class="empty">
+        <!-- Ekran logowania — widoczny gdy brak tokenu pCloud (bilet 03) -->
+        <div id="login-screen" class="empty" hidden>
+          <p><strong>Not connected yet</strong></p>
+          <p>Sign in to pCloud to browse and rate your recordings.</p>
+          <button id="btn-pcloud-login" type="button" class="btn">Sign in with pCloud</button>
+        </div>
+        <!-- Stan po połączeniu — biblioteka pojawia się po załadowaniu -->
+        <div id="empty-state" class="empty" hidden>
           <p>
             <strong>Not connected yet</strong> — your library appears here once you sign in to
             pCloud or open a local folder.

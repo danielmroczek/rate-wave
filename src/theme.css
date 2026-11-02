@@ -235,3 +235,19 @@ dialog#dlg-reset menu {
   margin: 16px 0 0;
   padding: 0;
 }
+
+/* ── ekran logowania pCloud (bilet 03) ──────────────────────── */
+
+#login-screen {
+  text-align: center;
+}
+
+#login-screen p {
+  margin: 0 0 8px;
+}
+
+#btn-pcloud-login {
+  margin-top: 12px;
+  font-size: 15px;
+  padding: 10px 24px;
+}

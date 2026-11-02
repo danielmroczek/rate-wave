@@ -1,21 +1,67 @@
 // Boot aplikacji (bilet 01): rejestracja SW, otwarcie bazy, sanity-check schematu,
 // podpięcie przycisku „wyczyść wszystkie dane" z potwierdzeniem (spec §4b).
+// Bilet 03: OAuth implicit login pCloud + walidacja tokenu przy starcie.
 import "./theme.css";
 import { openDB, getAllKeys, STORES, resetAllData } from "./store/db.js";
+import { initAuth, handleOAuthReturn, startOAuthLogin, getAuthState } from "./auth/auth-flow.js";
+
+/** Pokazuje/ukrywa ekrany na podstawie stanu autoryzacji. */
+function renderAuthState(state) {
+  const loginScreen = document.getElementById("login-screen");
+  const emptyState = document.getElementById("empty-state");
+  const toolbar = document.getElementById("toolbar");
+  const player = document.getElementById("player");
+
+  if (state === "login") {
+    loginScreen.hidden = false;
+    emptyState.hidden = true;
+    toolbar.hidden = true;
+    player.hidden = true;
+  } else if (state === "connected") {
+    loginScreen.hidden = true;
+    emptyState.hidden = false;
+    toolbar.hidden = false;
+    player.hidden = false;
+  }
+  // "checking" / "authenticating" — nie zmieniamy widoku
+}
 
 async function boot() {
   // 1. Baza — otwieramy raz i trzymamy na całą sesję (LWW, multi-tab bez locków).
+  let db;
   try {
-    const db = await openDB();
+    db = await openDB();
     const trackCount = (await getAllKeys(db, STORES.TRACKS)).length;
     document.getElementById("count").textContent = `${trackCount} items`;
-    window.__waveRateDB = db; // kolejne bilety (list/player) przejmą to jawnie
+    window.__waveRateDB = db;
   } catch (err) {
     console.error("openDB failed", err);
     document.getElementById("count").textContent = "database unavailable";
   }
 
-  // 2. „Wyczyść wszystkie dane": deleteDB + localStorage.clear() z potwierdzeniem.
+  // 2. Autoryzacja pCloud — OAuth return (dev) lub walidacja stored token (bilet 03).
+  if (db) {
+    // Na dev (localhost) redirect_uri = index.html — fragment z tokenem jest w bieżącym URL.
+    const wasOAuthReturn = await handleOAuthReturn({ db });
+    if (!wasOAuthReturn) {
+      // Walidacja stored token przez userinfo; fail → ciche czyszczenie + ekran logowania.
+      await initAuth({ db, onStateChange: renderAuthState });
+    } else {
+      // Token z just-completed OAuth — zapisany już w handleOAuthReturn
+      console.log("[boot] OAuth return processed — user signed in.");
+      renderAuthState("connected");
+    }
+  }
+
+  // Przycisk logowania pCloud
+  document.getElementById("btn-pcloud-login")?.addEventListener("click", startOAuthLogin);
+
+  // Jeśli autoryzacja się nie zadziałała (brak db itp.), pokaż login
+  if (getAuthState() === "idle") {
+    renderAuthState("login");
+  }
+
+  // 3. „Wyczyść wszystkie dane": deleteDB + localStorage.clear() z potwierdzeniem.
   const dlg = /** @type {HTMLDialogElement} */ (document.getElementById("dlg-reset"));
   document.getElementById("btn-reset")?.addEventListener("click", () => dlg.showModal());
   document.getElementById("dlg-cancel")?.addEventListener("click", () => dlg.close());
@@ -30,7 +76,7 @@ async function boot() {
     location.reload();
   });
 
-  // 3. PWA — Service Worker tylko na https/localhost (file:// niewspierany, spec §1a).
+  // 4. PWA — Service Worker tylko na https/localhost (file:// niewspierany, spec §1a).
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     const base = import.meta.env.BASE_URL; // dev '/', prod '/rate-wave/'
     navigator.serviceWorker
