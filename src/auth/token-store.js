@@ -27,14 +27,29 @@ function _ls(ref) {
 
 /**
  * Zapisuje token + hostname + locationid do localStorage i IDB (mirror).
- * @param {{ db: IDBDatabase, token: string, hostname: string, locationid: number, localStorage?: Storage }} params
+ * Pola opcjonalne (folderId/folderName — bilet #17) zapisywane w IDB, jeśli podane.
+ * @param {{ db: IDBDatabase, token: string, hostname: string, locationid: number, folderId?: string, folderName?: string | null, localStorage?: Storage }} params
  */
-export async function saveToken({ db, token, hostname, locationid, localStorage: ls }) {
+export async function saveToken({
+  db,
+  token,
+  hostname,
+  locationid,
+  folderId,
+  folderName,
+  localStorage: ls,
+}) {
   const storage = _ls(ls);
   storage.setItem(LS_TOKEN_KEY, token);
   storage.setItem(LS_HOSTNAME_KEY, hostname);
   storage.setItem(LS_LOCATIONID_KEY, String(locationid));
-  await put(db, STORES.SOURCES, PCLOUD_SOURCE_KEY, { token, hostname, locationid });
+  await put(db, STORES.SOURCES, PCLOUD_SOURCE_KEY, {
+    token,
+    hostname,
+    locationid,
+    ...(folderId !== undefined ? { folderId } : {}),
+    ...(folderName !== undefined ? { folderName } : {}),
+  });
 }
 
 /**
@@ -58,12 +73,14 @@ export function loadTokenFromLS(ls) {
  * Zwraca `{ token, hostname, locationid }` lub `null` gdy brak.
  */
 export async function loadTokenFromDB(db) {
-  const row = await get(db, STORES.SOURCES, PCLOUD_SOURCE_KEY);
+  const row = /** @type {any} */ (await get(db, STORES.SOURCES, PCLOUD_SOURCE_KEY));
   if (!row || !row.token) return null;
   return {
     token: row.token,
     hostname: row.hostname ?? "api.pcloud.com",
     locationid: row.locationid ?? 1,
+    folderId: row.folderId ?? null,
+    folderName: row.folderName ?? null,
   };
 }
 
