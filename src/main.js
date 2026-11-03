@@ -2,8 +2,10 @@
 // podpięcie przycisku „wyczyść wszystkie dane" z potwierdzeniem (spec §4b).
 // Bilet 03: OAuth implicit login pCloud + walidacja tokenu przy starcie.
 import "./theme.css";
-import { openDB, getAllKeys, STORES, resetAllData } from "./store/db.js";
+import { openDB, resetAllData } from "./store/db.js";
 import { initAuth, handleOAuthReturn, startOAuthLogin, getAuthState } from "./auth/auth-flow.js";
+import { loadTokenFromDB } from "./auth/token-store.js";
+import { mountLibraryView, unmountLibraryView } from "./library/library-view.js";
 
 /** Pokazuje/ukrywa ekrany na podstawie stanu autoryzacji. */
 function renderAuthState(state) {
@@ -31,8 +33,6 @@ async function boot() {
   let db;
   try {
     db = await openDB();
-    const trackCount = (await getAllKeys(db, STORES.TRACKS)).length;
-    document.getElementById("count").textContent = `${trackCount} items`;
     window.__waveRateDB = db;
   } catch (err) {
     console.error("openDB failed", err);
@@ -43,13 +43,29 @@ async function boot() {
   if (db) {
     // Na dev (localhost) redirect_uri = index.html — fragment z tokenem jest w bieżącym URL.
     const wasOAuthReturn = await handleOAuthReturn({ db });
+    let connected = false;
     if (!wasOAuthReturn) {
       // Walidacja stored token przez userinfo; fail → ciche czyszczenie + ekran logowania.
-      await initAuth({ db, onStateChange: renderAuthState });
+      const creds = await initAuth({ db, onStateChange: renderAuthState });
+      connected = creds !== null;
     } else {
       // Token z just-completed OAuth — zapisany już w handleOAuthReturn
       console.log("[boot] OAuth return processed — user signed in.");
       renderAuthState("connected");
+      connected = true;
+    }
+
+    // 2b. Biblioteka (bilet 04 + #17): cache IDB → instant; inaczej listing z
+    // wybranego folderu głównego (sources.folderId; default: całe konto).
+    if (connected) {
+      const creds = await loadTokenFromDB(db);
+      mountLibraryView({
+        db,
+        token: creds?.token,
+        hostname: creds?.hostname,
+        folderId: creds?.folderId ?? null,
+        folderName: creds?.folderName ?? null,
+      }).catch((err) => console.warn("[boot] library mount failed", err));
     }
   }
 
@@ -71,6 +87,7 @@ async function boot() {
     // może zostać zablokowane (onblocked) przez otwarte conn (review spec pkt 5).
     window.__waveRateDB?.close();
     window.__waveRateDB = undefined;
+    unmountLibraryView();
     await resetAllData();
     // LWW i czysty stan: po resecie przeładowanie daje świeży shell + pustą bazę.
     location.reload();
