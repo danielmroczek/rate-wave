@@ -3,7 +3,8 @@
 // obsługę powrotu z OAuth (token z localStorage po redirect).
 
 import { buildAuthUrl, verifyState } from "./oauth.js";
-import { loadTokenFromLS, saveToken, clearToken } from "./token-store.js";
+import { loadTokenFromLS, saveToken, clearToken, PCLOUD_SOURCE_KEY } from "./token-store.js";
+import { get, STORES } from "../store/db.js";
 import { validateToken } from "./pcloud-api.js";
 
 /** @typedef {"idle"|"checking"|"login"|"authenticating"|"connected"} AuthState */
@@ -57,12 +58,17 @@ export async function initAuth({ db, onStateChange } = {}) {
   try {
     await validateToken({ token: stored.token, hostname: stored.hostname });
 
-    // Token OK — mirror w IDB (SW + Background Sync)
+    // Token OK — mirror w IDB (SW + Background Sync). Zachowujemy pola poza
+    // tokenem (folderId/folderName biblioteki — bilet #17), które saveToken
+    // nadpisze pełnym obiektem.
+    const existing = await get(db, STORES.SOURCES, PCLOUD_SOURCE_KEY);
     await saveToken({
       db,
       token: stored.token,
       hostname: stored.hostname,
       locationid: stored.locationid,
+      folderId: existing?.folderId,
+      folderName: existing?.folderName,
     });
 
     change("connected");

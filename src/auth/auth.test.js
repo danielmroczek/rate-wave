@@ -16,8 +16,10 @@ import {
   loadTokenFromDB,
   clearToken,
   apiBaseUrl,
+  PCLOUD_SOURCE_KEY,
 } from "./token-store.js";
 import { pcloudApi, validateToken } from "./pcloud-api.js";
+import { put, STORES } from "../store/db.js";
 
 // ── Pomocnicze ──
 
@@ -166,14 +168,24 @@ describe("token-store.js — saveToken + loadTokenFromLS", () => {
     expect(result).toBeNull();
   });
 
-  it("loadTokenFromDB czyta z IDB", async () => {
+  it("loadTokenFromDB czyta z IDB (+ folder biblioteki, bilet #17)", async () => {
     await saveToken({ db, token: "xyz", hostname: "api.pcloud.com", locationid: 1, localStorage });
     const result = await loadTokenFromDB(db);
     expect(result).toEqual({
       token: "xyz",
       hostname: "api.pcloud.com",
       locationid: 1,
+      folderId: null,
+      folderName: null,
     });
+    await put(db, STORES.SOURCES, PCLOUD_SOURCE_KEY, {
+      token: "xyz",
+      folderId: "7",
+      folderName: "Muzyka",
+    });
+    const again = await loadTokenFromDB(db);
+    expect(again.folderId).toBe("7");
+    expect(again.folderName).toBe("Muzyka");
   });
 
   it("clearToken usuwa token z localStorage i IDB", async () => {
