@@ -251,3 +251,105 @@ dialog#dlg-reset menu {
   font-size: 15px;
   padding: 10px 24px;
 }
+
+/* ── biblioteka pCloud (bilet 04): drzewko Roczników + windowed lista ── */
+
+/* tryb biblioteki: viewport bez domyślnego scroll-paddingu — zarządza nim layout */
+.viewport-library {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+#library-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: var(--pad);
+  width: 100%;
+  min-height: 0;
+}
+
+/* mobile: Roczniki zawinięte poziomo (dyrektywa FLAT/METRO) */
+@media (max-width: 767px) {
+  #library-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  #roczniki {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+#roczniki {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--pad) 0 var(--pad) var(--pad);
+  overflow-y: auto;
+}
+
+.rocznik-btn {
+  background: transparent;
+  color: var(--tx2);
+  border: 0;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.rocznik-btn:hover {
+  background: var(--bg3);
+  color: var(--tx);
+}
+
+/* aktywny Rocznik = pełne tło (FLAT/METRO: hierarchia przez wypełnienie, nie ramka) */
+.rocznik-btn.active {
+  background: var(--acc-sel);
+  color: var(--tx);
+  font-weight: 600;
+}
+
+.rocznik-btn:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+
+#track-list {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  position: relative;
+}
+
+.track-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+.row-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-stars {
+  color: var(--tx2);
+  letter-spacing: 2px;
+  flex: none;
+}
+
+.row-bpm,
+.row-badge {
+  flex: none;
+  min-width: 56px;
+  text-align: right;
+  color: var(--tx2);
+}
