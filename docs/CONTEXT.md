@@ -52,6 +52,10 @@ _Avoid_: merge, rozwiązywanie konfliktów
 Podfolder Źródła nazywany od roku nagrania (2017–2026); jedyny filtr listy — drzewko po lewej: klik = filtr, „wszystkie" = reset, aktywny podświetlony pełnym tłem. Wszystkie Roczniki widoczne zawsze (nawet przy pustych wynikach — lista ma nie zaskakiwać).
 _Avoid_: katalog, folder (w UI), tagowanie dat
 
+**Proxy odczytu (Read Proxy)**:
+Jedyny komponent pośredniczący — Cloudflare Worker — przez który przeglądarka uzyskuje bajty Utworów z pCloud: passthrough linku do plików plus strumień bajtów z AACO. Odczyty przez `fetch` idą przez Proxy odczytu; odtwarzanie przez element mediowy może iść bezpośrednio.
+_Avoid_: backend, serwer aplikacji, CDN
+
 **Ostatnio słuchane (Last Played)**:
 Tryb sortowania: malejąco po dacie-czasu ostatniego odtwarzania Utworu (reszta wg nazwy). Zasilane polem `lastPlayed` w Cache ocen, ustawianym w chwili startu odtwarzania.
 _Avoid_: historia odtwarzania, kolejka
