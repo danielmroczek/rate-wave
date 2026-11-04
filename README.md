@@ -80,6 +80,11 @@ src/
   store/db.js          — IndexedDB `rate-wave` v1: 6 stores + full data reset
   store/db.test.js     — schema & reset tests
 vite.config.js         — base /rate-wave/, MPA (index + oauth), SW precache plugin
+worker/
+  src/worker.js        — READ-PROXY (Cloudflare Worker): /getfilelink passthrough
+                         + /stream bajtów z ACAO; rate-limit ≤10 zaległych getfilelink
+  test/worker-test.js  — unit testy workera (node:test, `node test/worker-test.js`)
+  wrangler.jsonc       — config workera (workers.dev, ALLOWED_ORIGINS)
 ```
 
 The whole data layer is **IndexedDB** (`rate-wave` v1): settings, sources, library listing, track metadata (rating, gain, waveform peaks, last-played), an offline rating queue, and the current session. "Clear all data" is a single button away — it deletes the database and `localStorage`; your files on pCloud are never touched.
@@ -88,7 +93,27 @@ The whole data layer is **IndexedDB** (`rate-wave` v1): settings, sources, libra
 
 **Vite+** ([viteplus.dev](https://viteplus.dev)) — one unified toolchain: Vite (v8, Rolldown), Vitest, oxlint and oxfmt in a single `vite-plus` devDependency. Vanilla-JS ES modules, no framework.
 
-Deployment is a plain static build on **GitHub Pages** ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)); file downloads go through a small READ-PROXY (Cloudflare Worker) that also serves byte ranges. For the full picture see the [specification](docs/spec.md) and the [glossary](docs/CONTEXT.md).
+Deployment is a plain static build on **GitHub Pages** ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)); file downloads go through a small **READ-PROXY** (Cloudflare Worker) that also serves byte ranges. For the full picture see the [specification](docs/spec.md) and the [glossary](docs/CONTEXT.md).
+
+### READ-PROXY worker
+
+`fetch()` reads of track bytes (ID3 tag reads, waveform, ReplayGain, rating rewrite) go through the READ-PROXY Cloudflare Worker ([`worker/`](worker/)) — pCloud file hosts never return `Access-Control-Allow-Origin`, so browsers can't fetch those bytes directly. Playback via `<audio>` stays direct (uses the link from `getfilelink`).
+
+Endpoints (auth is a passthrough of the user's own OAuth token; see [ADR 0001](docs/adr/0001-read-proxy-auth.md)):
+
+| Endpoint                                   | What it does                                                                                                                        |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /getfilelink?fileid=…&access_token=…` | calls pCloud `getfilelink`, returns the file link + `expires` (worker is stateless, holds no secrets)                               |
+| `GET /stream?url=…`                        | fetches bytes from the pCloud file host and streams them with `Access-Control-Allow-Origin`; forwards `Range` (206 Partial Content) |
+| `GET /stream?fileid=…&access_token=…`      | same, but generates the link in the same invocation (retry loop over fresh links × all `hosts[]`) — preferred for JS byte reads     |
+| `GET /health`                              | smoke check                                                                                                                         |
+
+Guards: allowed-origin list (`ALLOWED_ORIGINS` in `wrangler.jsonc`), target host limited to `*.pcloud.com` (no token in file URLs), in-memory limit of 10 outstanding `getfilelink` calls per token → `429`. Tokens are never logged.
+
+Local development: `cd worker && npm install && npm run dev` (wrangler, `http://localhost:8787`); point the app at it with `VITE_RW_PROXY_URL`. Deployment runs on pushes to `main` touching `worker/**` ([`deploy-worker.yml`](.github/workflows/deploy-worker.yml)) and needs the `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` repo secrets.
+
+> [!NOTE]
+> pCloud file links are **IP-bound** (undocumented: a link returns HTTP 410 "generated for another IP address" when fetched from a different IP). For JS byte reads use the `/stream?fileid=…` mode — it regenerates the link and retries across all `hosts[]` in one invocation (~85% per-request success; failures surface as `pcloud_link_unavailable`). Details in [the probe research](docs/research/probe-origin-read-proxy.md).
 
 ## Status
 
