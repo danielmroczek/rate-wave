@@ -1,0 +1,12 @@
+{
+  "name": "rate-wave-read-proxy",
+  "main": "src/worker.js",
+  "workers_dev": true,
+  "preview_urls": false,
+  "compatibility_date": "2024-09-23",
+  "vars": {
+    // Origin(y) uprawnione do czytania odpowiedzi (ACAO). Rozdzielane przecinkiem;
+    // nadpisane przy deployu, jeżeli finalny URL aplikacji jest inny.
+    "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://danielmroczek.github.io",
+  },
+}
