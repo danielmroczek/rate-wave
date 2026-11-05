@@ -43,5 +43,5 @@ jobs:
       - name: Smoke check
         if: success()
         run: |
-          url="https://rate-wave-read-proxy.danielmroczek.workers.dev/health"
+          url="https://rate-wave-read-proxy.dmroczek.workers.dev/health"
           curl -fsS --retry 3 "$url"
