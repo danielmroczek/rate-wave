@@ -9,6 +9,7 @@ import { loadLibraryOrFetch, loadRatings, makeCounter } from "./library-controll
 import { loadLibrary, deleteLibrary } from "./library-cache.js";
 import { createRootPicker } from "./root-picker.js";
 import { get, put, STORES } from "../store/db.js";
+import { loadSession } from "../player/player-state.js";
 
 /** Widok biblioteki zamontowany. */
 let mounted = false;
@@ -215,6 +216,8 @@ export async function mountLibraryView({
   pcloudApi,
   folderId: storedFolderId,
   folderName: storedFolderName,
+  onPlay,
+  onPlaylist,
   onError,
 }) {
   if (mounted) return;
@@ -334,9 +337,13 @@ export async function mountLibraryView({
     renderRow: ({ index }) => renderTrackRow(filtered[index]),
   });
 
+  /** Aktualnie zaznaczony Utwór (podświetlenie `.sel` na liście). */
+  let selectedKey = /** @type {string | null} */ (null);
+
   function renderTrackRow(track) {
     const row = document.createElement("div");
     row.className = "list-row track-row";
+    if (track.key === selectedKey) row.classList.add("sel");
     row.dataset.key = track.key;
 
     const name = document.createElement("span");
@@ -354,11 +361,62 @@ export async function mountLibraryView({
     const badge = document.createElement("span");
     badge.className = "row-badge slot";
 
+    // Klik/tap wiersza wybiera Utwór i od razu odtwarza (bilet 06).
+    row.addEventListener("click", () => selectTrack(track));
+
     row.append(name, stars, bpm, badge);
     return row;
   }
 
+  function updateSelectionClasses() {
+    for (const el of listViewport.querySelectorAll(".track-row")) {
+      el.classList.toggle("sel", el.dataset.key === selectedKey);
+    }
+  }
+
+  /**
+   * Zaznacza wiersz na liście i (jeśli `onPlay`) od razu odtwarza Utwór.
+   * @param {import("./listing.js").LibraryTrack} track
+   * @param {{ startAt?: number, autoplay?: boolean }} [playOpts]
+   */
+  function selectTrack(track, playOpts) {
+    selectedKey = track.key;
+    updateSelectionClasses();
+    if (onPlay) onPlay(track, playOpts);
+  }
+
   let filtered = /** @type {import("./listing.js").LibraryTrack[]} */ (library.tracks);
+
+  /**
+   * Synchronizacja player → lista (bilet 06): podświetla wiersz key (i dociąga
+   * go do widoku). Gdy Utwór jest poza aktywnym filtrem Rocznika — reset filtra
+   * na „All", żeby zaznaczenie było widoczne.
+   * @param {string} key
+   * @returns {boolean} true, gdy Utwór istnieje w bibliotece i zaznaczono
+   */
+  function selectKey(key) {
+    const track = library.tracks.find((t) => t.key === key);
+    if (!track) return false;
+    if (!filtered.some((t) => t.key === key)) {
+      rocznik = null;
+      renderSidebar();
+      update(); // setRows → scrollTop=0, kolejny scrollTo i tak ustawi
+    }
+    selectedKey = key;
+    list.update();
+    updateSelectionClasses();
+    const idx = filtered.findIndex((t) => t.key === key);
+    if (idx >= 0) {
+      const vpH = listViewport.clientHeight || 1;
+      const top = idx * ROW_HEIGHT;
+      const bottom = top + ROW_HEIGHT;
+      if (top < listViewport.scrollTop || bottom > listViewport.scrollTop + vpH) {
+        listViewport.scrollTop = Math.max(0, top - vpH / 2 + ROW_HEIGHT / 2);
+        list.update();
+      }
+    }
+    return true;
+  }
 
   function filteredTracks() {
     return filterByRocznik(library.tracks, rocznik);
@@ -400,6 +458,7 @@ export async function mountLibraryView({
     filtered = filteredTracks();
     list.setRows(filtered.length);
     updateCounter();
+    onPlaylist?.(filtered);
 
     // hierarchia tłem: aktywny Rocznik pełnym tłem
     for (const el of sidebar.querySelectorAll(".rocznik-btn")) {
@@ -479,6 +538,30 @@ export async function mountLibraryView({
 
   renderSidebar();
   update();
+
+  // ── Pełny powrót sesji (bilet 06): store `session` → ostatni Utwór + pozycja.
+  // Degradacja: Utwór zniknął z biblioteki → tylko zaznaczenie listy (pierwszy
+  // wiersz, bez odtwarzania); pusta biblioteka → brak zaznaczenia.
+  try {
+    const sess = await loadSession(db);
+    const sessKey = sess?.trackKey;
+    if (typeof sessKey === "string" && sessKey) {
+      const last = library.tracks.find((t) => t.key === sessKey) ?? null;
+      if (last) {
+        selectTrack(last, { startAt: Number(sess?.positionSec) || 0 });
+      } else if (library.tracks.length > 0) {
+        selectedKey = library.tracks[0].key;
+        updateSelectionClasses();
+        console.info(`[library] session track ${sessKey} gone — selected first row only`);
+      } else {
+        console.info("[library] empty library — no selection");
+      }
+    }
+  } catch (err) {
+    console.warn("[library] session restore failed", err);
+  }
+
+  return { selectKey }; // sync player → lista (transport N/P, bilet 06)
 }
 
 /** Demontuje widok biblioteki (reset danych / logout). */
