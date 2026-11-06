@@ -165,6 +165,123 @@ p code {
   padding: 10px var(--pad) calc(10px + env(safe-area-inset-bottom));
 }
 
+#pstars {
+  color: var(--tx2);
+  letter-spacing: 2px;
+  font-size: 13px;
+}
+
+/* slot waveformu — od startu jedyny pasek scrubbingu („placeholder, po pierwszej
+   ocenie" bilet 06); po pierwszej ocenie przewinie się na realny wave */
+.wave-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.wave-slot {
+  flex: 1;
+  min-width: 0;
+  height: 48px;
+  border-radius: 6px;
+  background: var(--bg3);
+  color: var(--tx2);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  position: relative;
+  cursor: pointer;
+  touch-action: none;
+}
+
+/* postęp na placeholderze waveformu (pełne pasmo dopiero po pierwszej ocenie) */
+#wave-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  border-radius: 6px;
+  background: var(--acc);
+  opacity: 0.18;
+  pointer-events: none;
+}
+
+.wave-label {
+  position: relative; /* tekst nad warstwą postępu */
+  z-index: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#ptime {
+  flex: none;
+  font-size: 12px;
+  color: var(--tx2);
+  font-variant-numeric: tabular-nums;
+}
+
+#pnote {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--danger);
+  text-align: right;
+}
+
+#transport {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.tbtn {
+  background: var(--bg3);
+  color: var(--tx);
+  border: 0;
+  border-radius: 99px;
+  width: 38px;
+  height: 38px;
+  font-size: 15px;
+  cursor: pointer;
+  /* wyśrodkowanie glifu: flex + line-height 1 (emoji mają bufor w metrykach) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.tbtn.main {
+  background: var(--acc);
+  color: #fff;
+  width: 46px;
+  height: 46px;
+  font-size: 18px;
+}
+
+/* autoplay zablokowany po Pełnym powrocie — przycisk pulsuje, czeka na tap */
+.tbtn.pulse {
+  animation: tbtn-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tbtn-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.45);
+  }
+}
+
+.tbtn:hover {
+  filter: brightness(1.15);
+}
+
 #ptitle {
   font-weight: 600;
   font-size: 14px;
