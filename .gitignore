@@ -9,4 +9,6 @@
 
 # Build + zależności (Vite+)
 dist/
+worker/dist
+worker/.wrangler
 node_modules/
