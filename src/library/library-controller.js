@@ -3,7 +3,7 @@
 // Logika niezależna od DOM (testowalne).
 
 import { buildLibrary, filterByRocznik, countUnrated, LISTING_PARAMS } from "./listing.js";
-import { loadLibrary, saveLibrary, saveTracks, clearTracks } from "./library-cache.js";
+import { loadLibrary, saveLibrary, saveTracks } from "./library-cache.js";
 import { getAllKeys, getAllValues, get, put, STORES } from "../store/db.js";
 
 /** @typedef {import("./listing.js").Library} Library */
@@ -131,8 +131,8 @@ export async function loadLibraryOrFetch({
         const response = await s.run(h);
         const library = buildLibrary(response);
 
-        // Cache: listing + Fingerprint w `library`, rekordy Utworów w `tracks`.
-        await clearTracks(db);
+        // Cache: listing + Fingerprint w `library`, rekordy Utworów w `tracks`
+        // (atomowy rebuild: scalenie rating/lastPlayed dzieje się w saveTracks).
         await saveTracks(db, library.tracks);
         await saveLibrary(db, library);
         // Zapamiętaj działający hostname + wybrany folder w `sources` — kolejne

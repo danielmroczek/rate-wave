@@ -101,6 +101,58 @@ describe("library-cache", () => {
     expect((await getAllKeys(db, STORES.TRACKS)).length).toBe(0);
   });
 
+  it("saveTracks po rebuildzie zachowuje rating i lastPlayed (spec §4a: przeżywają unieważnienie)", async () => {
+    await saveTracks(db, LIBRARY.tracks);
+    const rec = await get(db, STORES.TRACKS, "pcloud|1");
+    rec.rating = 160;
+    rec.lastPlayed = 1234567890;
+    const { put } = await import("../store/db.js");
+    await put(db, STORES.TRACKS, "pcloud|1", rec);
+    // Rebuild (ten sam listing, bez zmian Fingerprintu): łączenie, nie nadpisywanie.
+    await saveTracks(db, LIBRARY.tracks);
+    const after = await get(db, STORES.TRACKS, "pcloud|1");
+    expect(after.rating).toBe(160);
+    expect(after.lastPlayed).toBe(1234567890);
+    expect(after.fingerprint).toEqual({ size: 1000, modified: 1700000000 });
+    // Utwór, który nie dostał oceny/lastPlayed, ma dalej rating placeholder null.
+    const other = await get(db, STORES.TRACKS, "pcloud|2");
+    expect(other.rating).toBeNull();
+  });
+
+  it("rebuild atomowy: rating tylko przy zgodnym Fingerprintzie, lastPlayed zawsze, usunięty znika (spec §4a/4b)", async () => {
+    const { put } = await import("../store/db.js");
+    await saveTracks(db, LIBRARY.tracks);
+    const rec = await get(db, STORES.TRACKS, "pcloud|1");
+    rec.rating = 160;
+    rec.lastPlayed = 1234567890;
+    await put(db, STORES.TRACKS, "pcloud|1", rec);
+    const rec2 = await get(db, STORES.TRACKS, "pcloud|2");
+    rec2.rating = 196;
+    rec2.lastPlayed = 42;
+    await put(db, STORES.TRACKS, "pcloud|2", rec2);
+
+    // Nowy listing: pcloud|1 bez zmian, pcloud|2 zmieniony tag (inny Fingerprint),
+    // pcloud|3 nowy, pcloud|5 (warped/x.mp3) usunięty ze Źródła.
+    await saveTracks(db, [
+      { key: "pcloud|1", name: "a.mp3", fingerprint: { size: 1000, modified: 1700000000 } },
+      { key: "pcloud|2", name: "b.mp3", fingerprint: { size: 2222, modified: 1800000000 } },
+      { key: "pcloud|3", name: "c.mp3", fingerprint: { size: 10, modified: 2 } },
+    ]);
+
+    const t1 = await get(db, STORES.TRACKS, "pcloud|1");
+    expect(t1.rating).toBe(160); // zgodny Fingerprint → cache ocen dalej ważny
+    expect(t1.lastPlayed).toBe(1234567890);
+
+    const t2 = await get(db, STORES.TRACKS, "pcloud|2");
+    expect(t2.rating).toBeNull(); // rozbieżność → pola tagowe czyszczone (§4b)…
+    expect(t2.lastPlayed).toBe(42); // …ale lastPlayed zostaje
+
+    const t3 = await get(db, STORES.TRACKS, "pcloud|3");
+    expect(t3).toEqual({ fingerprint: { size: 10, modified: 2 }, rating: null });
+
+    expect(await get(db, STORES.TRACKS, "pcloud|5")).toBeUndefined();
+  });
+
   it("del na tracks działa (podstaw walidacji per-odczyt)", async () => {
     await saveTracks(db, LIBRARY.tracks);
     await del(db, STORES.TRACKS, "pcloud|1");
