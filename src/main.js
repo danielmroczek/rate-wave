@@ -6,7 +6,7 @@ import { openDB, resetAllData } from "./store/db.js";
 import { initAuth, handleOAuthReturn, startOAuthLogin, getAuthState } from "./auth/auth-flow.js";
 import { loadTokenFromDB } from "./auth/token-store.js";
 import { mountLibraryView, unmountLibraryView } from "./library/library-view.js";
-
+import { mountPlayer } from "./player/player-view.js";
 /** Pokazuje/ukrywa ekrany na podstawie stanu autoryzacji. */
 function renderAuthState(state) {
   const loginScreen = document.getElementById("login-screen");
@@ -31,6 +31,8 @@ function renderAuthState(state) {
 async function boot() {
   // 1. Baza — otwieramy raz i trzymamy na całą sesję (LWW, multi-tab bez locków).
   let db;
+  /** @type {ReturnType<typeof mountPlayer> | null} */
+  let mountedPlayer = null;
   try {
     db = await openDB();
     window.__waveRateDB = db;
@@ -59,13 +61,39 @@ async function boot() {
     // wybranego folderu głównego (sources.folderId; default: całe konto).
     if (connected) {
       const creds = await loadTokenFromDB(db);
+      // Player (bilet 06): klik wiersza → onPlay → <audio src> z getfilelink.
+      // Transport N/P zmienia Utwór w playerze (inny stan niż zaznaczenie
+      // listy) — sync przez onTrackChange → library-view.selectKey.
+      let notifyTrackChange = /** @type {((t: any) => void) | null} */ (null);
+      const player =
+        creds?.token && creds?.hostname
+          ? mountPlayer({
+              db,
+              token: creds.token,
+              hostname: creds.hostname,
+              onTrackChange: (t) => notifyTrackChange?.(t),
+            })
+          : null;
+      mountedPlayer = player;
+      if (!player) console.warn("[boot] player mount skipped — missing pCloud creds");
+      /** @type {{ selectKey: (key: string) => boolean } | undefined} */
+      let libraryApi;
       mountLibraryView({
         db,
         token: creds?.token,
         hostname: creds?.hostname,
         folderId: creds?.folderId ?? null,
         folderName: creds?.folderName ?? null,
-      }).catch((err) => console.warn("[boot] library mount failed", err));
+        onPlay: player ? (track, opts) => void player.play(track, opts) : undefined,
+        onPlaylist: player ? (tracks) => player.setPlaylist(tracks) : undefined,
+      })
+        .then((api) => {
+          libraryApi = api;
+          notifyTrackChange = (t) => libraryApi?.selectKey(/** @type {any} */ (t)?.key);
+          // Utwór wybrany, zanim API biblioteki doszło (Pełny powrót) — zaznacz.
+          if (player?.currentTrack) libraryApi.selectKey(player.currentTrack.key);
+        })
+        .catch((err) => console.warn("[boot] library mount failed", err));
     }
   }
 
@@ -87,6 +115,7 @@ async function boot() {
     // może zostać zablokowane (onblocked) przez otwarte conn (review spec pkt 5).
     window.__waveRateDB?.close();
     window.__waveRateDB = undefined;
+    mountedPlayer?.dispose();
     unmountLibraryView();
     await resetAllData();
     // LWW i czysty stan: po resecie przeładowanie daje świeży shell + pustą bazę.
