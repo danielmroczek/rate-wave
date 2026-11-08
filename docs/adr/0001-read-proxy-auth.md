@@ -40,7 +40,9 @@ with the caller's identity. This exposes the token in the worker's own URL
   with the file link (used directly by `<audio>`), `GET /stream?url=…` streams
   bytes with per-origin `Access-Control-Allow-Origin` (fetch-reads: tags,
   waveform, ReplayGain, rating rewrite).
-- Rate limiting (`≤10 outstanding getfilelink`) is enforced in-memory per
+- Rate limiting (`≤12 outstanding getfilelink`; podniesione z 10 przy #19 —
+  /head używa 12 równoległych fetchy, pomiar: brak 429 do 30 równoległych)
+  is enforced in-memory per
   token; cold start resets it, which is safe for a single-user-at-a-time app.
 - Origin allowlist (workers vars), not `*`, prevents the proxy from becoming
   an open CORS relay; stream targets are restricted to `*.pcloud.com` hosts.

@@ -82,7 +82,7 @@ src/
 vite.config.js         — base /rate-wave/, MPA (index + oauth), SW precache plugin
 worker/
   src/worker.js        — READ-PROXY (Cloudflare Worker): /getfilelink passthrough
-                         + /stream bajtów z ACAO; rate-limit ≤10 zaległych getfilelink
+                         + /stream bajtów z ACAO; rate-limit ≤12 zaległych getfilelink;
   test/worker-test.js  — unit testy workera (node:test, `node test/worker-test.js`)
   wrangler.jsonc       — config workera (workers.dev, ALLOWED_ORIGINS)
 ```
@@ -106,9 +106,10 @@ Endpoints (auth is a passthrough of the user's own OAuth token; see [ADR 0001](d
 | `GET /getfilelink?fileid=…&access_token=…` | calls pCloud `getfilelink`, returns the file link + `expires` (worker is stateless, holds no secrets)                               |
 | `GET /stream?url=…`                        | fetches bytes from the pCloud file host and streams them with `Access-Control-Allow-Origin`; forwards `Range` (206 Partial Content) |
 | `GET /stream?fileid=…&access_token=…`      | same, but generates the link in the same invocation (retry loop over fresh links × all `hosts[]`) — preferred for JS byte reads     |
+| `POST /head?access_token=…` — body `{"fileids":[…]}` | batch ID3 head prefetch: up to **20 fileids**, fetches the first 8 KB of each (`Range: bytes=0-8191`) with per-file IP-binding retry, 12 concurrent fetches; streams **NDJSON** (`application/x-ndjson`) line per file as soon as it's ready: `{"fileid":123,"status":"ok","bytesBase64":"…"}` or `{"fileid":123,"status":"error","code":"…"}` |
 | `GET /health`                              | smoke check                                                                                                                         |
 
-Guards: allowed-origin list (`ALLOWED_ORIGINS` in `wrangler.jsonc`), target host limited to `*.pcloud.com` (no token in file URLs), in-memory limit of 10 outstanding `getfilelink` calls per token → `429`. Tokens are never logged.
+Guards: allowed-origin list (`ALLOWED_ORIGINS` in `wrangler.jsonc`), target host limited to `*.pcloud.com` (no token in file URLs), in-memory limit of 12 outstanding `getfilelink` calls per token → `429`. Batch size on `/head` is capped at 20 (2 subrequests per file ≈ 40, within the 50-subrequests-per-invocation free-plan limit). Tokens are never logged.
 
 Local development: `cd worker && npm install && npm run dev` (wrangler, `http://localhost:8787`); point the app at it with `VITE_RW_PROXY_URL`. Deployment runs on pushes to `main` touching `worker/**` ([`deploy-worker.yml`](.github/workflows/deploy-worker.yml)) and needs the `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` repo secrets.
 
