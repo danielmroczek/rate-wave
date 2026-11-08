@@ -5,7 +5,7 @@
 // obok aktualny czas.
 
 import { createPlayer, loadSession } from "./player-state.js";
-import { getTrackLink } from "../api/worker-proxy.js";
+import { trackStreamUrl } from "../api/worker-proxy.js";
 
 /** mm:ss (duration z preload=metadata — działa od startu, bez peaks). */
 export function formatTime(sec) {
@@ -115,7 +115,12 @@ export function mountPlayer({
   // ── stan: playlist do transportu N/P ────────────────────────
   let playlist = /** @type {any[]} */ ([]);
 
-  const link = getLink ?? ((t) => getTrackLink({ token, hostname, fileid: t.fileid }));
+  // <audio> gra przez proxy /stream: bezpośredni link pCloud jest powiązany z IP
+  // Workera i w przeglądarce kończy się 410 (patrz worker-proxy.js).
+  // getLink zwraca { link } — kontrakt player-state; pudełkowanie stringa w
+  // obiekt chroni przed destrukturyzacją metod String.prototype (np. `link`).
+  const link =
+    getLink ?? (async (t) => ({ link: trackStreamUrl({ token, hostname, fileid: t.fileid }) }));
   const player = createPlayer({
     db,
     getLink: link,

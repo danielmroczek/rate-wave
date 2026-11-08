@@ -63,6 +63,14 @@ const TRACK = { key: "pcloud|1", fileid: 1, name: "A.mp3" };
 const TRACK2 = { key: "pcloud|2", fileid: 2, name: "B.mp3" };
 
 describe("mountPlayer — struktura (prototyp player-ux)", () => {
+  it("domyślnie gra przez proxy /stream (getLink → { link }, string skrzynkowany w obiekt)", async () => {
+    const log = [];
+    const view = mount({ getLink: undefined, createAudio: factoryWithLog(log) });
+    await view.play(TRACK);
+    expect(log.at(-1).src).toContain("/stream");
+    expect(log.at(-1).src).toContain("fileid=1");
+  });
+
   it("ma tytuł, gwiazdki, transport, czas i duży slot waveformu (jeden pasek scrubbingu)", () => {
     mount();
     expect(document.getElementById("ptitle").textContent).toBe("Nothing selected");

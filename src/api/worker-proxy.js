@@ -1,7 +1,7 @@
 // Klient READ-PROXY (bilet 05, spec §8: api/worker-proxy.js).
-// Wywołania fetch przez proxy: /getfilelink (link dla <audio>) i /stream (bajty
-// z ACAO dla odczytu tagów / waveformu / ReplayGain). <audio> gra bezpośrednio
-// z linku — przez proxy idą tylko bajty czytane przez JS (T3c).
+// <audio> gra przez /stream (link pCloud jest powiązany z IP Workera —
+// bezpośredni link w przeglądarce → 410). /getfilelink zostaje passthrough
+// do odczytu metadanych / zapisu tagów z użyciem linku na stronie workera.
 
 const PROXY_BASE_URL = import.meta.env?.VITE_RW_PROXY_URL || "http://localhost:8787";
 
@@ -12,6 +12,24 @@ export class ProxyError extends Error {
     this.statusCode = status;
     this.code = code;
   }
+}
+
+/**
+ * Buduje URL /stream proxy do użycia jako <audio src>. Nie zwraca bezpośredniego
+ * linku pCloud, bo ten jest powiązany z IP Workera („generated for another IP"
+ * → 410 w przeglądarce); /stream generuje link i czyta bajty w jednym wywołaniu.
+ * @param {{ token: string, fileid?: string|number, path?: string, hostname?: string, contenttype?: string }} opts
+ * @returns {string}
+ */
+export function trackStreamUrl({ token, fileid, path, hostname, contenttype }) {
+  if (!fileid && !path) throw new Error("trackStreamUrl: fileid or path required");
+  const url = new URL(`${PROXY_BASE_URL}/stream`);
+  url.searchParams.set("access_token", token);
+  if (fileid != null) url.searchParams.set("fileid", String(fileid));
+  if (path) url.searchParams.set("path", path);
+  if (hostname) url.searchParams.set("hostname", hostname);
+  if (contenttype) url.searchParams.set("contenttype", contenttype);
+  return url.href;
 }
 
 /**
