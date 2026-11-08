@@ -173,7 +173,8 @@ async function handleGetFileLink(request, env, url) {
 // Zwraca {body} (JSON pCloud) albo Response (błąd walidacji / 429) — błędy
 // walidacji bez ACAO; odbiorca musi je owinąć corsHeaders().
 const MAX_STREAM_ATTEMPTS = 8; // IP-binding: ~85% udanych streamów wymaga kilku linków
-export { MAX_STREAM_ATTEMPTS };
+// Bez exportu: workers runtime traktuje każdy nazwany export jako handler
+// ("Incorrect type for map entry 'MAX_STREAM_ATTEMPTS'") i worker nie startuje.
 async function callGetFileLink(token, { fileid, path, hostname, forcedownload, contenttype }) {
   hostname = hostname || "eapi.pcloud.com";
   if (!API_HOSTS.has(hostname)) return jsonError(400, "bad_api_host", {});
