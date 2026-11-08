@@ -97,7 +97,7 @@ Deployment is a plain static build on **GitHub Pages** ([`.github/workflows/depl
 
 ### READ-PROXY worker
 
-`fetch()` reads of track bytes (ID3 tag reads, waveform, ReplayGain, rating rewrite) go through the READ-PROXY Cloudflare Worker ([`worker/`](worker/)) — pCloud file hosts never return `Access-Control-Allow-Origin`, so browsers can't fetch those bytes directly. Playback via `<audio>` stays direct (uses the link from `getfilelink`).
+`fetch()` reads of track bytes (ID3 tag reads, waveform, ReplayGain, rating rewrite) and `<audio>` playback go through the READ-PROXY Cloudflare Worker ([`worker/`](worker/)) — pCloud file hosts never return `Access-Control-Allow-Origin`, so browsers can't fetch those bytes directly, and pCloud download links are IP-bound (picking the link from the Worker's `/getfilelink` and playing it from the browser yields `410 Gone`). Playback therefore uses the `/stream?fileid=…` endpoint, which generates the link and reads bytes in one Worker invocation.
 
 Endpoints (auth is a passthrough of the user's own OAuth token; see [ADR 0001](docs/adr/0001-read-proxy-auth.md)):
 
