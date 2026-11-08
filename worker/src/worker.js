@@ -5,7 +5,7 @@
 
 const API_HOSTS = new Set(["eapi.pcloud.com", "api.pcloud.com"]);
 const PCLOUD_HOST_RE = /\.pcloud\.com$/;
-const MAX_INFLIGHT_GETFILELINK = 10;
+const MAX_INFLIGHT_GETFILELINK = 12; // = HEAD_CONCURRENCY (pomiar 2026-11-07: brak 429 do 30 równoległych)
 
 // In-memory licznik zaległych getfilelink per token-hash (ADR 0001).
 // Cold start resetuje licznik — akceptowalne: aplikacja jest jednoużytkownikowa.
@@ -16,6 +16,10 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") return preflight(request, env);
+    if (url.pathname === "/head" && request.method === "POST")
+      return handleHead(request, env, url);
+    if (url.pathname === "/head")
+      return jsonError(405, "method_not_allowed", corsHeaders(request, env));
     if (request.method !== "GET")
       return jsonError(405, "method_not_allowed", corsHeaders(request, env));
 
@@ -33,6 +37,108 @@ export default {
     return jsonError(404, "not_found", corsHeaders(request, env));
   },
 };
+
+// === /head (bilet 19): batch headów ID3, NDJSON streamowany żywcem ===
+// 20 fileids = 40 subreq + zapas na retry (limit planu: 50/wywołanie, twardy
+// sufit HEAD_SUBREQUEST_BUDGET=46 pilnowany licznikiem per invocation).
+const HEAD_CAP = 20;
+const HEAD_CONCURRENCY = 12; // 429 too_many_getfilelink nie występuje do 30 równoległych (pomiar 2026-11-07)
+const HEAD_RANGE = "bytes=0-8191"; // 8 KB: 2× margines nad gorszy przypadek tagu (~4190 B)
+const HEAD_SUBREQUEST_BUDGET = 46; // < 50 (limit planu); zwrot linii budget_exhausted zamiast platformowego błędu
+
+async function handleHead(request, env, url) {
+  const cors = corsHeaders(request, env);
+  const token = url.searchParams.get("access_token");
+  if (!token) return jsonError(400, "missing_access_token", cors);
+
+  let fileids;
+  try {
+    fileids = (await request.json())?.fileids;
+  } catch {
+    return jsonError(400, "bad_json", cors);
+  }
+  if (
+    !Array.isArray(fileids) ||
+    fileids.length === 0 ||
+    fileids.some((id) => !Number.isInteger(id))
+  ) {
+    return jsonError(400, "bad_fileids", cors);
+  }
+  if (fileids.length > HEAD_CAP) return jsonError(400, "too_many_fileids", cors);
+
+  const encoder = new TextEncoder();
+  const budget = { n: 0 }; // licznik subrequestów invocation (limit planu: 50)
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+
+  // Start natychmiast — linie NDJSON lecą po gotowości, bez czekania na komplet.
+  (async () => {
+    try {
+      await runPool(fileids, HEAD_CONCURRENCY, async (fileid) => {
+        let line;
+        try {
+          line = { fileid, status: "ok", bytesBase64: await headBytes(token, fileid, budget) };
+        } catch (err) {
+          line = { fileid, status: "error", code: err.code || "head_error" };
+        }
+        await writer.write(encoder.encode(JSON.stringify(line) + "\n"));
+      });
+      await writer.close();
+    } catch (err) {
+      await writer.abort(err);
+    }
+  })();
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      ...cors,
+    },
+  });
+}
+
+// Prosty pool: posortowanej kolejności nie gwarantujemy — linia leci, gdy plik gotowy.
+async function runPool(items, limit, fn) {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
+// Per plik: getfilelink + Range-download z retry IP-binding (logika /stream).
+// Błąd pliku → throw {code} — nie przerywa batcha.
+async function headBytes(token, fileid, budget) {
+  for (let attempt = 0; attempt < MAX_STREAM_ATTEMPTS; attempt++) {
+    if (budget.n >= HEAD_SUBREQUEST_BUDGET) throw { code: "budget_exhausted" };
+    budget.n++; // getfilelink
+    const outcome = await callGetFileLink(token, { fileid: String(fileid) });
+    if (outcome instanceof Response) throw { code: JSON.parse(await outcome.text()).error };
+    let data;
+    try {
+      data = JSON.parse(outcome.body);
+    } catch {
+      throw { code: "getfilelink_error" };
+    }
+    if (data.result !== 0 || !Array.isArray(data.hosts) || !data.hosts[0]) {
+      throw { code: `pcloud_result_${data.result ?? "unknown"}` };
+    }
+    for (const host of data.hosts) {
+      if (budget.n >= HEAD_SUBREQUEST_BUDGET) throw { code: "budget_exhausted" };
+      budget.n++; // download
+      const res = await downloadBytes({}, HEAD_RANGE, `https://${host}${data.path}`);
+      if (res.status < 400) {
+        const buf = await res.arrayBuffer();
+        return btoa(String.fromCharCode(...new Uint8Array(buf)));
+      }
+    }
+  }
+  throw { code: "pcloud_link_unavailable" };
+}
 
 // === /getfilelink: wywołanie eapi i zwrot JSON z linkiem (app używa go dla <audio>) ===
 async function handleGetFileLink(request, env, url) {
@@ -63,10 +169,11 @@ async function handleGetFileLink(request, env, url) {
   });
 }
 
-// Wywołanie getfilelink na eapi z limitem zaległych wywołań (≤10, AC).
+// Wywołanie getfilelink na eapi z limitem zaległych wywołań (in-memory, per token).
 // Zwraca {body} (JSON pCloud) albo Response (błąd walidacji / 429) — błędy
 // walidacji bez ACAO; odbiorca musi je owinąć corsHeaders().
 const MAX_STREAM_ATTEMPTS = 8; // IP-binding: ~85% udanych streamów wymaga kilku linków
+export { MAX_STREAM_ATTEMPTS };
 async function callGetFileLink(token, { fileid, path, hostname, forcedownload, contenttype }) {
   hostname = hostname || "eapi.pcloud.com";
   if (!API_HOSTS.has(hostname)) return jsonError(400, "bad_api_host", {});
@@ -247,8 +354,8 @@ function preflight(request, env) {
     status: 204,
     headers: {
       ...corsHeaders(request, env),
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Range",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Range, Content-Type",
       "Access-Control-Max-Age": "86400",
     },
   });
