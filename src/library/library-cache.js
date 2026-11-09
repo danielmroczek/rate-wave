@@ -83,7 +83,16 @@ export async function saveTracks(db, tracks) {
  * @param {import("./listing.js").LibraryTrack} t
  */
 function mergeTrack(prev, t) {
-  if (!prev) return { fingerprint: t.fingerprint, rating: null };
+  if (!prev) {
+    return {
+      fingerprint: t.fingerprint,
+      rating: null,
+      ratingSource: null,
+      rgGainDb: null,
+      rgSource: null,
+      tagsReadAt: null,
+    };
+  }
   const diverged =
     prev.fingerprint &&
     t.fingerprint &&
@@ -91,7 +100,12 @@ function mergeTrack(prev, t) {
       prev.fingerprint.modified !== t.fingerprint.modified);
   return {
     fingerprint: t.fingerprint,
+    // Rozbieżność Fingerprintu czyści tagi (rating, RG, źródła) — bilet #7.
     rating: diverged ? null : (prev.rating ?? null),
+    ratingSource: diverged ? null : (prev.ratingSource ?? null),
+    rgGainDb: diverged ? null : (prev.rgGainDb ?? null),
+    rgSource: diverged ? null : (prev.rgSource ?? null),
+    tagsReadAt: diverged ? null : (prev.tagsReadAt ?? null),
     ...("lastPlayed" in prev ? { lastPlayed: prev.lastPlayed } : {}),
   };
 }
