@@ -26,8 +26,9 @@ Most players lock your ratings inside their own library database. rate-wave does
 
 1. **Connect a source** — sign in to pCloud (OAuth) or pick a local folder; the library listing is cached so it loads instantly next time.
 2. **Browse and play** — filter by year folder, search by filename, sort by name, rating, tempo, or last played.
-3. **Rate and tag** — a rating or BPM change patches the MP3's ID3 tag and uploads the file back to its source. Changes made offline are queued and flushed when you're back online.
-4. **Resume anywhere** — the app remembers your session, restoring the last track and playback position on every visit.
+3. **Lazy tag read** — stars for visible tracks are read without downloading files: fetches ~8 KB ID3 heads through the batch `POST /head` proxy, parses them with `music-metadata` in a web worker (POPM rating: WMP frame wins, otherwise the highest byte of other frames; ReplayGain is stored in the cache for later use), then backfills the rest of the library in the background while you scroll.
+4. **Rate and tag** — a rating or BPM change patches the MP3's ID3 tag and uploads the file back to its source. Changes made offline are queued and flushed when you're back online.
+5. **Resume anywhere** — the app remembers your session, restoring the last track and playback position on every visit.
 
 Ratings use the `POPM` tag in the Windows Media Player convention, so any compatible player (WMP, foobar2000, MusicBee, Mp3tag, Poweramp…) reads and writes the same stars. Nothing is deleted from your files — only the rating-related tag is touched.
 
@@ -101,13 +102,13 @@ Deployment is a plain static build on **GitHub Pages** ([`.github/workflows/depl
 
 Endpoints (auth is a passthrough of the user's own OAuth token; see [ADR 0001](docs/adr/0001-read-proxy-auth.md)):
 
-| Endpoint                                   | What it does                                                                                                                        |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /getfilelink?fileid=…&access_token=…` | calls pCloud `getfilelink`, returns the file link + `expires` (worker is stateless, holds no secrets)                               |
-| `GET /stream?url=…`                        | fetches bytes from the pCloud file host and streams them with `Access-Control-Allow-Origin`; forwards `Range` (206 Partial Content) |
-| `GET /stream?fileid=…&access_token=…`      | same, but generates the link in the same invocation (retry loop over fresh links × all `hosts[]`) — preferred for JS byte reads     |
+| Endpoint                                             | What it does                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /getfilelink?fileid=…&access_token=…`           | calls pCloud `getfilelink`, returns the file link + `expires` (worker is stateless, holds no secrets)                                                                                                                                                                                                                                          |
+| `GET /stream?url=…`                                  | fetches bytes from the pCloud file host and streams them with `Access-Control-Allow-Origin`; forwards `Range` (206 Partial Content)                                                                                                                                                                                                            |
+| `GET /stream?fileid=…&access_token=…`                | same, but generates the link in the same invocation (retry loop over fresh links × all `hosts[]`) — preferred for JS byte reads                                                                                                                                                                                                                |
 | `POST /head?access_token=…` — body `{"fileids":[…]}` | batch ID3 head prefetch: up to **20 fileids**, fetches the first 8 KB of each (`Range: bytes=0-8191`) with per-file IP-binding retry, 12 concurrent fetches; streams **NDJSON** (`application/x-ndjson`) line per file as soon as it's ready: `{"fileid":123,"status":"ok","bytesBase64":"…"}` or `{"fileid":123,"status":"error","code":"…"}` |
-| `GET /health`                              | smoke check                                                                                                                         |
+| `GET /health`                                        | smoke check                                                                                                                                                                                                                                                                                                                                    |
 
 Guards: allowed-origin list (`ALLOWED_ORIGINS` in `wrangler.jsonc`), target host limited to `*.pcloud.com` (no token in file URLs), in-memory limit of 12 outstanding `getfilelink` calls per token → `429`. Batch size on `/head` is capped at 20 (2 subrequests per file ≈ 40, within the 50-subrequests-per-invocation free-plan limit). Tokens are never logged.
 
