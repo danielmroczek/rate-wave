@@ -16,6 +16,9 @@
     "fmt": "vp fmt",
     "check": "vp check"
   },
+  "dependencies": {
+    "music-metadata": "^12.3.5"
+  },
   "devDependencies": {
     "@tabler/icons": "^3.50.0",
     "fake-indexeddb": "^6.2.7",
