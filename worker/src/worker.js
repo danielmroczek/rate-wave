@@ -16,8 +16,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") return preflight(request, env);
-    if (url.pathname === "/head" && request.method === "POST")
-      return handleHead(request, env, url);
+    if (url.pathname === "/head" && request.method === "POST") return handleHead(request, env, url);
     if (url.pathname === "/head")
       return jsonError(405, "method_not_allowed", corsHeaders(request, env));
     if (request.method !== "GET")

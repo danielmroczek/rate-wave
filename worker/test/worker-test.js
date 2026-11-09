@@ -303,13 +303,17 @@ function installHeadMock({ bytes = "ID3_HEAD_BYTES", downloadStatus = "ok", coun
       if (counts) counts.getfilelink++;
       const fileid = u.searchParams.get("fileid");
       return Promise.resolve(
-        new Response(JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: `/${fileid}.mp3` }), {
-          status: 200,
-        }),
+        new Response(
+          JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: `/${fileid}.mp3` }),
+          {
+            status: 200,
+          },
+        ),
       );
     }
     if (counts) counts.download++;
-    if (downloadStatus === "ip-bind") return Promise.resolve(new Response("other-ip", { status: 410 }));
+    if (downloadStatus === "ip-bind")
+      return Promise.resolve(new Response("other-ip", { status: 410 }));
     return Promise.resolve(
       new Response(bytes, { status: 206, headers: { "Content-Range": "bytes 0-8191/5000000" } }),
     );
@@ -331,10 +335,16 @@ test("head: happy path, 2 pliki, NDJSON ok + base64, Range bytes=0-8191", async 
   assert.equal(res.headers.get("Content-Type"), "application/x-ndjson; charset=utf-8");
   assert.equal(res.headers.get("Access-Control-Allow-Origin"), ORIGIN);
   const text = await res.text();
-  const lines = text.trim().split("\n").map((l) => JSON.parse(l));
+  const lines = text
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
   assert.deepEqual(
     lines.map((l) => [l.fileid, l.status]),
-    [[1, "ok"], [2, "ok"]],
+    [
+      [1, "ok"],
+      [2, "ok"],
+    ],
   );
   assert.equal(Buffer.from(lines[0].bytesBase64, "base64").toString(), "ID3DATA");
   // 2 pliki × (getfilelink + download) = 4 subrequesty; Range 8 KB na download
@@ -348,21 +358,32 @@ test("head: częściowy błąd — plik z trwałym IP-binding → linia error, b
     if (u.hostname === "eapi.pcloud.com")
       return Promise.resolve(
         new Response(
-          JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: u.searchParams.get("fileid") === "1" ? "/broken.mp3" : "/ok.mp3" }),
+          JSON.stringify({
+            result: 0,
+            hosts: ["file-u3.pcloud.com"],
+            path: u.searchParams.get("fileid") === "1" ? "/broken.mp3" : "/ok.mp3",
+          }),
           { status: 200 },
         ),
       );
-    if (u.pathname === "/broken.mp3") return Promise.resolve(new Response("other-ip", { status: 410 }));
+    if (u.pathname === "/broken.mp3")
+      return Promise.resolve(new Response("other-ip", { status: 410 }));
     return Promise.resolve(new Response("OK", { status: 206 }));
   };
   const res = await worker.fetch(reqPost("/head?access_token=tok", { fileids: [1, 2] }), ENV);
   assert.equal(res.status, 200);
-  const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
+  const lines = (await res.text())
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
   // NDJSON live: linie w kolejności gotowości, więc sortujemy po fileid.
   lines.sort((a, b) => a.fileid - b.fileid);
   assert.deepEqual(
     lines.map((l) => [l.fileid, l.status]),
-    [[1, "error"], [2, "ok"]],
+    [
+      [1, "error"],
+      [2, "ok"],
+    ],
   );
   assert.ok(lines[0].code);
   assert.equal(Buffer.from(lines[1].bytesBase64, "base64").toString(), "OK");
@@ -371,11 +392,25 @@ test("head: częściowy błąd — plik z trwałym IP-binding → linia error, b
 test("head: cap 21 fileids → 400; 20 fileids → 20 linii NDJSON", async () => {
   counts = { getfilelink: 0, download: 0 };
   installHeadMock({ bytes: "B", counts });
-  assert.equal((await worker.fetch(reqPost("/head?access_token=tok", { fileids: Array.from({ length: 21 }, (_, i) => i + 1) }), ENV)).status, 400);
+  assert.equal(
+    (
+      await worker.fetch(
+        reqPost("/head?access_token=tok", { fileids: Array.from({ length: 21 }, (_, i) => i + 1) }),
+        ENV,
+      )
+    ).status,
+    400,
+  );
 
-  const res = await worker.fetch(reqPost("/head?access_token=tok", { fileids: Array.from({ length: 20 }, (_, i) => i + 1) }), ENV);
+  const res = await worker.fetch(
+    reqPost("/head?access_token=tok", { fileids: Array.from({ length: 20 }, (_, i) => i + 1) }),
+    ENV,
+  );
   assert.equal(res.status, 200);
-  const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
+  const lines = (await res.text())
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
   assert.equal(lines.length, 20);
   assert.ok(lines.every((l) => l.status === "ok"));
 });
@@ -386,9 +421,12 @@ test("head: twardy sufit 46 subrequestów → linie budget_exhausted zamiast pad
     const u = new URL(url);
     if (u.hostname === "eapi.pcloud.com")
       return Promise.resolve(
-        new Response(JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: "/bad.mp3" }), {
-          status: 200,
-        }),
+        new Response(
+          JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: "/bad.mp3" }),
+          {
+            status: 200,
+          },
+        ),
       );
     return Promise.resolve(new Response("other-ip", { status: 410 }));
   };
@@ -397,7 +435,10 @@ test("head: twardy sufit 46 subrequestów → linie budget_exhausted zamiast pad
     ENV,
   );
   assert.equal(res.status, 200);
-  const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
+  const lines = (await res.text())
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
   assert.equal(lines.length, 20);
   assert.ok(lines.every((l) => l.status === "error" && l.code));
 });

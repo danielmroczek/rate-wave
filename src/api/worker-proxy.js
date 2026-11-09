@@ -3,7 +3,10 @@
 // bezpośredni link w przeglądarce → 410). /getfilelink zostaje passthrough
 // do odczytu metadanych / zapisu tagów z użyciem linku na stronie workera.
 
-const PROXY_BASE_URL = import.meta.env?.VITE_RW_PROXY_URL || "http://localhost:8787";
+/**
+ * Baza URL READ-PROXY (współdzielona przez worker-proxy + proxy-batch).
+ */
+export const PROXY_BASE_URL = import.meta.env?.VITE_RW_PROXY_URL || "http://localhost:8787";
 
 export class ProxyError extends Error {
   constructor(code, status) {
