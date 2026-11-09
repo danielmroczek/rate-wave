@@ -8,11 +8,19 @@ import { WindowedList, ROW_HEIGHT } from "./windowing.js";
 import { loadLibraryOrFetch, loadRatings, makeCounter } from "./library-controller.js";
 import { loadLibrary, deleteLibrary } from "./library-cache.js";
 import { createRootPicker } from "./root-picker.js";
+import { createTagReadController } from "./tag-read-controller.js";
+import { HEAD_BATCH_CAP } from "../api/proxy-batch.js";
 import { get, put, STORES } from "../store/db.js";
 import { loadSession } from "../player/player-state.js";
 
 /** Widok biblioteki zamontowany. */
 let mounted = false;
+
+/** Biblioteki do tej granicy backfillują „bezpośrednio" (bez restForBackfill). */
+const DIRECT_BACKFILL_LIMIT = 50;
+
+/** Aktywny kontroler odczytu tagów (do posprzątania przy unmount). */
+let tagControllerRef = /** @type {ReturnType<typeof createTagReadController> | null} */ (null);
 
 /** Leniwy import cienkiego klienta fetch — produkcja nie wstrzykuje pcloudApi. */
 async function resolveApi(/** @type {(o: any) => Promise<any> | undefined} */ injected) {
@@ -310,6 +318,26 @@ export async function mountLibraryView({
   /** @type {Map<string, any>} */
   const ratings = await loadRatings(db);
 
+  // ── odczyt tagów lazy (bilet #7): gwiazdki widocznych przez batchowy /head ──
+  /** @type {ReturnType<typeof createTagReadController> | null} */
+  let tagController = null;
+  function makeTagController() {
+    const c = createTagReadController({
+      db,
+      token: /** @type {string} */ (token),
+      tracks: library.tracks,
+      ratings,
+      onTagsRead: (key, rec) => {
+        ratings.set(key, rec);
+        refreshRowStars(key);
+        updateCounter();
+      },
+    });
+    tagControllerRef = c;
+    return c;
+  }
+  if (token) tagController = makeTagController();
+
   /** Aktualnie aktywny Rocznik (null = „wszystkie"). */
   let rocznik = /** @type {string | null} */ (null);
 
@@ -335,7 +363,36 @@ export async function mountLibraryView({
     viewport: listViewport,
     rowHeight: ROW_HEIGHT,
     renderRow: ({ index }) => renderTrackRow(filtered[index]),
+    onVisibleChange: ({ first, last }) => {
+      if (!tagController) return;
+      // Widoczne = okno ±1 batch (plan biletu #7, bez IntersectionObserver per wiersz).
+      const from = Math.max(0, first - HEAD_BATCH_CAP);
+      const to = Math.min(filtered.length, last + HEAD_BATCH_CAP);
+      const windowTracks = filtered.slice(from, to);
+      tagController.setVisibleTracks(windowTracks);
+      // Backfill: brak visible-pending → reszta biblioteki w tle (idle kolejka;
+      // mała biblioteka jedzie bezpośrednio).
+      if (filtered.length > DIRECT_BACKFILL_LIMIT) {
+        tagController.enqueueIdle(restForBackfill());
+      } else {
+        const windowSet = new Set(windowTracks);
+        tagController.enqueueIdle(filtered.filter((t) => !windowSet.has(t)));
+      }
+      tagController.onVisibleSettled();
+    },
   });
+
+  listViewport.addEventListener("scroll", () => tagController?.onScrollActive(), {
+    passive: true,
+  });
+
+  /** Tracki jeszcze nie przeczytane (status != done) — do idle kolejki. */
+  function restForBackfill() {
+    return filtered.filter((t) => {
+      const rec = ratings.get(t.key);
+      return !(rec && rec.tagsReadAt != null);
+    });
+  }
 
   /** Aktualnie zaznaczony Utwór (podświetlenie `.sel` na liście). */
   let selectedKey = /** @type {string | null} */ (null);
@@ -353,7 +410,7 @@ export async function mountLibraryView({
 
     const stars = document.createElement("span");
     stars.className = "row-stars";
-    stars.textContent = "☆☆☆☆☆";
+    applyRowStars(stars, track.key);
 
     const bpm = document.createElement("span");
     bpm.className = "row-bpm slot";
@@ -371,6 +428,23 @@ export async function mountLibraryView({
   function updateSelectionClasses() {
     for (const el of listViewport.querySelectorAll(".track-row")) {
       el.classList.toggle("sel", el.dataset.key === selectedKey);
+    }
+  }
+
+  /** Gwiazdki wiersza wg cache `tracks`: ocena → ★; przed odczytem/bez oceny → outline (placeholder §2b). */
+  function applyRowStars(/** @type {HTMLElement} */ el, /** @type {string} */ key) {
+    const rec = ratings.get(key);
+    const rating = rec && typeof rec.rating === "number" ? rec.rating : null;
+    el.textContent = rating ? "★".repeat(rating) + "☆".repeat(5 - rating) : "☆☆☆☆☆";
+    el.classList.toggle("pending", !rating);
+  }
+
+  /** Odświeża gwiazdki widocznego wiersza po odczycie tagów (bilet #7). */
+  function refreshRowStars(/** @type {string} */ key) {
+    for (const el of listViewport.querySelectorAll(".track-row")) {
+      if (el.dataset.key !== key) continue;
+      const stars = el.querySelector(".row-stars");
+      if (stars) applyRowStars(/** @type {HTMLElement} */ (stars), key);
     }
   }
 
@@ -504,6 +578,9 @@ export async function mountLibraryView({
         onProgress,
       }));
       rocznik = null;
+      tagController?.destroy();
+      tagController = null;
+      makeTagController();
       renderSidebar();
       update();
       emptyState.hidden = true;
@@ -566,6 +643,8 @@ export async function mountLibraryView({
 
 /** Demontuje widok biblioteki (reset danych / logout). */
 export function unmountLibraryView() {
+  tagControllerRef?.destroy();
+  tagControllerRef = null;
   mounted = false;
   document.getElementById("library-layout")?.remove();
   document.getElementById("btn-root")?.remove();

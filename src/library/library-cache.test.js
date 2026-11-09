@@ -91,7 +91,14 @@ describe("library-cache", () => {
   it("saveTracks: rekordy z Fingerprintem + rating placeholder, klucz 'pcloud|<id>'", async () => {
     await saveTracks(db, LIBRARY.tracks);
     const rec = await get(db, STORES.TRACKS, "pcloud|1");
-    expect(rec).toEqual({ fingerprint: { size: 1000, modified: 1700000000 }, rating: null });
+    expect(rec).toEqual({
+      fingerprint: { size: 1000, modified: 1700000000 },
+      rating: null,
+      ratingSource: null,
+      rgGainDb: null,
+      rgSource: null,
+      tagsReadAt: null,
+    });
     expect((await getAllKeys(db, STORES.TRACKS)).length).toBe(2);
   });
 
@@ -148,7 +155,14 @@ describe("library-cache", () => {
     expect(t2.lastPlayed).toBe(42); // …ale lastPlayed zostaje
 
     const t3 = await get(db, STORES.TRACKS, "pcloud|3");
-    expect(t3).toEqual({ fingerprint: { size: 10, modified: 2 }, rating: null });
+    expect(t3).toEqual({
+      fingerprint: { size: 10, modified: 2 },
+      rating: null,
+      ratingSource: null,
+      rgGainDb: null,
+      rgSource: null,
+      tagsReadAt: null,
+    });
 
     expect(await get(db, STORES.TRACKS, "pcloud|5")).toBeUndefined();
   });

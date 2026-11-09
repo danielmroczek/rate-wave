@@ -463,6 +463,11 @@ dialog#dlg-reset menu {
   flex: none;
 }
 
+/* Placeholder gwiazdek przed odczytem tagów / bez oceny (bilet #7, §2b): */
+.row-stars.pending {
+  opacity: 0.35;
+}
+
 .row-bpm,
 .row-badge {
   flex: none;
