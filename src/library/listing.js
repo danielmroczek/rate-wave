@@ -6,7 +6,7 @@
 /** Katalogi do odrzucenia (cała gałąź, spec "warped/"). */
 const EXCLUDED_DIRS = new Set(["warped"]);
 
-/** @typedef {{ key: string, fileid: number, name: string, rocznik: string|null, size: number, modified: number, fingerprint: { size: number, modified: number } }} LibraryTrack */
+/** @typedef {{ key: string, fileid: number, name: string, rocznik: string|null, folderid: string|null, size: number, modified: number, fingerprint: { size: number, modified: number } }} LibraryTrack */
 /** @typedef {{ name: string, count: number }} RocznikEntry */
 /** @typedef {{ tracks: LibraryTrack[], roczniki: RocznikEntry[], fingerprint: { size: number, modified: number } }} Library */
 
@@ -26,9 +26,10 @@ export function rocznikOf(segments) {
  * Rekord Utworu z Fingerprintem (spec: klucz 'pcloud|'+fileid).
  * @param {any} file — filemetadata listing pCloud
  * @param {string[]} segments — segmenty od roota
+ * @param {string | number} [folderid] — folder zawierający plik (do uploadfile overwrite)
  * @returns {LibraryTrack}
  */
-export function makeTrack(file, segments) {
+export function makeTrack(file, segments, folderid = null) {
   const size = Number(file.size) || 0;
   const modified = Number(file.modified) || 0;
   return {
@@ -36,6 +37,7 @@ export function makeTrack(file, segments) {
     fileid: file.fileid,
     name: String(file.name),
     rocznik: rocznikOf(segments),
+    folderid: folderid == null ? null : String(folderid),
     size,
     modified,
     fingerprint: { size, modified },
@@ -50,9 +52,10 @@ export function makeTrack(file, segments) {
  * @param {any} node — foldermetadata (root): { contents?: any[] }
  * @param {LibraryTrack[]} out — akumulator wyjściowy
  * @param {string[]} segments — segmenty katalogów od roota
+ * @param {string | number | null} [folderid] — folderid bieżącego node'a (dziedziczony)
  * @returns {number} suma byte wszystkich przyjętych MP3 (składnik Fingerprintu listing)
  */
-export function collectTracks(node, out = [], segments = []) {
+export function collectTracks(node, out = [], segments = [], folderid = node?.folderid ?? null) {
   const items = node?.contents ?? node?.children ?? [];
   const dirs = [];
   let sumBytes = 0;
@@ -63,13 +66,18 @@ export function collectTracks(node, out = [], segments = []) {
       dirs.push(item);
     } else if (item && typeof item.fileid !== "undefined" && !item.isfolder) {
       if (!String(item.name).toLowerCase().endsWith(".mp3")) continue;
-      out.push(makeTrack(item, segments));
+      out.push(makeTrack(item, segments, folderid));
       sumBytes += Number(item.size) || 0;
     }
   }
 
   for (const folder of dirs) {
-    sumBytes += collectTracks(folder, out, [...segments, String(folder.name)]);
+    sumBytes += collectTracks(
+      folder,
+      out,
+      [...segments, String(folder.name)],
+      folder.folderid ?? folderid,
+    );
   }
   return sumBytes;
 }

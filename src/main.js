@@ -65,6 +65,8 @@ async function boot() {
       // Transport N/P zmienia Utwór w playerze (inny stan niż zaznaczenie
       // listy) — sync przez onTrackChange → library-view.selectKey.
       let notifyTrackChange = /** @type {((t: any) => void) | null} */ (null);
+      /** @type {{ selectKey: (key: string) => boolean, rate: (key: string, stars: 1|2|3|4|5|null) => boolean, getRating: (key: string) => number | null } | undefined} */
+      let libraryApi;
       const player =
         creds?.token && creds?.hostname
           ? mountPlayer({
@@ -72,12 +74,14 @@ async function boot() {
               token: creds.token,
               hostname: creds.hostname,
               onTrackChange: (t) => notifyTrackChange?.(t),
+              getRating: (key) => libraryApi?.getRating(key) ?? null,
+              onRate: (track, stars) => {
+                libraryApi?.rate(track.key, /** @type {1|2|3|4|5} */ (stars));
+              },
             })
           : null;
       mountedPlayer = player;
       if (!player) console.warn("[boot] player mount skipped — missing pCloud creds");
-      /** @type {{ selectKey: (key: string) => boolean } | undefined} */
-      let libraryApi;
       mountLibraryView({
         db,
         token: creds?.token,
@@ -86,6 +90,7 @@ async function boot() {
         folderName: creds?.folderName ?? null,
         onPlay: player ? (track, opts) => void player.play(track, opts) : undefined,
         onPlaylist: player ? (tracks) => player.setPlaylist(tracks) : undefined,
+        onRatingChange: (key, state) => player?.setRating(key, state.rating),
       })
         .then((api) => {
           libraryApi = api;

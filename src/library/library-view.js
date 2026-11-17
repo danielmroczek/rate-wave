@@ -9,6 +9,9 @@ import { loadLibraryOrFetch, loadRatings, makeCounter } from "./library-controll
 import { loadLibrary, deleteLibrary } from "./library-cache.js";
 import { createRootPicker } from "./root-picker.js";
 import { createTagReadController } from "./tag-read-controller.js";
+import { createRatingController } from "../ratings/rating-controller.js";
+import { createStarControl, setStarDisplay } from "../ratings/star-control.js";
+import { isEditableTarget } from "../ui/keyboard.js";
 import { HEAD_BATCH_CAP } from "../api/proxy-batch.js";
 import { get, put, STORES } from "../store/db.js";
 import { loadSession } from "../player/player-state.js";
@@ -21,6 +24,12 @@ const DIRECT_BACKFILL_LIMIT = 50;
 
 /** Aktywny kontroler odczytu tagów (do posprzątania przy unmount). */
 let tagControllerRef = /** @type {ReturnType<typeof createTagReadController> | null} */ (null);
+
+/** Listener skrótów 1–5/0 (sprzątany przy unmount). */
+let ratingKeyHandlerRef = /** @type {((e: KeyboardEvent) => void) | null} */ (null);
+
+/** Timer komunikatu o nieudanym zapisie. */
+let ratingNoteTimer = /** @type {any} */ (null);
 
 /** Leniwy import cienkiego klienta fetch — produkcja nie wstrzykuje pcloudApi. */
 async function resolveApi(/** @type {(o: any) => Promise<any> | undefined} */ injected) {
@@ -215,7 +224,9 @@ function openRootDialog({ pcloudApi, token, hostname, onError }) {
 /**
  * Montuje widok biblioteki w #viewport. Bezpieczny wielokrotny (reconnect).
  *
- * @param {{ db: IDBDatabase, token?: string, hostname?: string, pcloudApi?: (o: any) => Promise<any>, folderId?: string | null, folderName?: string | null, onError?: (e: Error) => void }} opts
+ * @param {{ db: IDBDatabase, token?: string, hostname?: string, pcloudApi?: (o: any) => Promise<any>, folderId?: string | null, folderName?: string | null, onError?: (e: Error) => void,
+ *   onRatingChange?: (key: string, state: { rating: number | null, pending: boolean, error?: Error }) => void,
+ *   ratingIO?: { fetchBytes?: (o: any) => Promise<Uint8Array>, statFile?: (o: any) => Promise<any>, upload?: (o: any) => Promise<any>, now?: () => number } }} opts
  */
 export async function mountLibraryView({
   db,
@@ -227,6 +238,8 @@ export async function mountLibraryView({
   onPlay,
   onPlaylist,
   onError,
+  onRatingChange,
+  ratingIO,
 }) {
   if (mounted) return;
   const emptyState = document.getElementById("empty-state");
@@ -338,6 +351,48 @@ export async function mountLibraryView({
   }
   if (token) tagController = makeTagController();
 
+  // ── zapis oceny (bilet #8): optimistic + serializowany upload ──
+  /** @type {ReturnType<typeof createRatingController> | null} */
+  let ratingController = null;
+  function makeRatingController() {
+    if (!token) return null;
+    return createRatingController({
+      db,
+      token,
+      hostname,
+      tracks: library.tracks,
+      ratings,
+      onChange: (key, state) => {
+        refreshRowStars(key);
+        updateCounter();
+        onRatingChange?.(key, state);
+        if (state.error) showRatingError(state.error);
+      },
+      fetchBytes: ratingIO?.fetchBytes,
+      statFile: ratingIO?.statFile,
+      upload: ratingIO?.upload,
+      now: ratingIO?.now,
+    });
+  }
+  ratingController = makeRatingController();
+
+  const ratingNote = document.createElement("span");
+  ratingNote.id = "rating-note";
+  ratingNote.className = "hint";
+  ratingNote.setAttribute("role", "status");
+  ratingNote.hidden = true;
+  document.getElementById("count")?.after(ratingNote);
+
+  /** @param {Error} err */
+  function showRatingError(err) {
+    ratingNote.textContent = `Rating not saved: ${err.message}`;
+    ratingNote.hidden = false;
+    if (ratingNoteTimer) clearTimeout(ratingNoteTimer);
+    ratingNoteTimer = setTimeout(() => {
+      ratingNote.hidden = true;
+    }, 6000);
+  }
+
   /** Aktualnie aktywny Rocznik (null = „wszystkie"). */
   let rocznik = /** @type {string | null} */ (null);
 
@@ -408,8 +463,7 @@ export async function mountLibraryView({
     name.textContent = track.name;
     name.title = track.name;
 
-    const stars = document.createElement("span");
-    stars.className = "row-stars";
+    const stars = createStarControl({ onRate: (n) => rateKey(track.key, n) }).element;
     applyRowStars(stars, track.key);
 
     const bpm = document.createElement("span");
@@ -435,7 +489,7 @@ export async function mountLibraryView({
   function applyRowStars(/** @type {HTMLElement} */ el, /** @type {string} */ key) {
     const rec = ratings.get(key);
     const rating = rec && typeof rec.rating === "number" ? rec.rating : null;
-    el.textContent = rating ? "★".repeat(rating) + "☆".repeat(5 - rating) : "☆☆☆☆☆";
+    setStarDisplay(el, rating);
     el.classList.toggle("pending", !rating);
   }
 
@@ -458,6 +512,45 @@ export async function mountLibraryView({
     updateSelectionClasses();
     if (onPlay) onPlay(track, playOpts);
   }
+
+  /**
+   * Ocena Utworu (1–5 albo null = usuń). Optimistic aktualizuje mapę i DOM
+   * synchronicznie; upload idzie w tle, po kolei (bilet #8).
+   * @param {string} key
+   * @param {1|2|3|4|5|null} stars
+   * @returns {boolean}
+   */
+  function rateKey(key, stars) {
+    const track = library.tracks.find((t) => t.key === key);
+    if (!track) return false;
+    if (!ratingController) {
+      showRatingError(new Error("not connected to pCloud"));
+      return false;
+    }
+    try {
+      ratingController.rate(track, stars);
+      return true;
+    } catch (err) {
+      showRatingError(err instanceof Error ? err : new Error(String(err)));
+      return false;
+    }
+  }
+
+  /** Aktualna ocena (optimistic) dla Utworu — player synchronizuje z tego. */
+  function getRating(key) {
+    const rec = ratings.get(key);
+    return rec && typeof rec.rating === "number" ? rec.rating : null;
+  }
+
+  /** Skróty 1–5 (ocena) i 0 (usuń) — dotyczą zaznaczonego Utworu (spec §5c). */
+  function onRatingKey(e) {
+    if (e.repeat || isEditableTarget(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!/^[0-5]$/.test(e.key) || !selectedKey) return;
+    e.preventDefault();
+    rateKey(selectedKey, e.key === "0" ? null : /** @type {1|2|3|4|5} */ (Number(e.key)));
+  }
+  document.addEventListener("keydown", onRatingKey);
+  ratingKeyHandlerRef = onRatingKey;
 
   let filtered = /** @type {import("./listing.js").LibraryTrack[]} */ (library.tracks);
 
@@ -581,6 +674,7 @@ export async function mountLibraryView({
       tagController?.destroy();
       tagController = null;
       makeTagController();
+      ratingController = makeRatingController();
       renderSidebar();
       update();
       emptyState.hidden = true;
@@ -638,13 +732,24 @@ export async function mountLibraryView({
     console.warn("[library] session restore failed", err);
   }
 
-  return { selectKey }; // sync player → lista (transport N/P, bilet 06)
+  return {
+    selectKey, // sync player → lista (transport N/P, bilet 06)
+    /** Ocena Utworu z playera/skrótów (optimistic, bilet #8). */
+    rate: rateKey,
+    /** Ocena z cache w pamięci (player wyświetla gwiazdki). */
+    getRating,
+  };
 }
 
 /** Demontuje widok biblioteki (reset danych / logout). */
 export function unmountLibraryView() {
   tagControllerRef?.destroy();
   tagControllerRef = null;
+  if (ratingKeyHandlerRef) document.removeEventListener("keydown", ratingKeyHandlerRef);
+  ratingKeyHandlerRef = null;
+  if (ratingNoteTimer) clearTimeout(ratingNoteTimer);
+  ratingNoteTimer = null;
+  document.getElementById("rating-note")?.remove();
   mounted = false;
   document.getElementById("library-layout")?.remove();
   document.getElementById("btn-root")?.remove();

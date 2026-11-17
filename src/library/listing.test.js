@@ -90,9 +90,10 @@ describe("rocznikOf / makeTrack", () => {
   });
 
   it("rekord Utworu z Fingerprintem i kluczem 'pcloud|<fileid>'", () => {
-    const t = makeTrack({ fileid: 7, name: "x.mp3", size: 111, modified: 222 }, ["2017"]);
+    const t = makeTrack({ fileid: 7, name: "x.mp3", size: 111, modified: 222 }, ["2017"], 100);
     expect(t.key).toBe("pcloud|7");
     expect(t.rocznik).toBe("2017");
+    expect(t.folderid).toBe("100");
     expect(t.fingerprint).toEqual({ size: 111, modified: 222 });
   });
 });
@@ -124,6 +125,15 @@ describe("buildLibrary", () => {
     const lib = buildLibrary(fakeResponse());
     expect(lib.fingerprint.size).toBe(1000 + 2000 + 4000 + 500);
     expect(lib.fingerprint.modified).toBe(1700000600);
+  });
+
+  it("folderid pliku = folder zawierający (potrzebny do uploadfile overwrite)", () => {
+    const lib = buildLibrary(fakeResponse());
+    const byName = Object.fromEntries(lib.tracks.map((t) => [t.name, t.folderid]));
+    expect(byName["a.mp3"]).toBe("100");
+    expect(byName["b.mp3"]).toBe("100");
+    expect(byName["c.MP3"]).toBe("220"); // 2018/take2
+    expect(byName["root-file.mp3"]).toBe("0"); // bezpośrednio w root
   });
 });
 

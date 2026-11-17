@@ -468,6 +468,40 @@ dialog#dlg-reset menu {
   opacity: 0.35;
 }
 
+/* Gwiazdki oceny (bilet #8): pięć przycisków bez ramek, FLAT/METRO. */
+.star-rating {
+  display: inline-flex;
+  align-items: center;
+  letter-spacing: 0;
+}
+
+.star-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0 1px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.star-btn:hover {
+  color: var(--tx);
+}
+
+.star-btn.on {
+  color: var(--acc);
+}
+
+.star-btn:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
+
 .row-bpm,
 .row-badge {
   flex: none;

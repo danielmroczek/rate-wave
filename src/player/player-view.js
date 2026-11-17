@@ -6,18 +6,13 @@
 
 import { createPlayer, loadSession } from "./player-state.js";
 import { trackStreamUrl } from "../api/worker-proxy.js";
+import { createStarControl } from "../ratings/star-control.js";
+import { isEditableTarget } from "../ui/keyboard.js";
 
 /** mm:ss (duration z preload=metadata — działa od startu, bez peaks). */
 export function formatTime(sec) {
   const s = Math.max(0, Math.floor(sec || 0));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/** Czy klucz Wake z eventów klawiatury trafia w pole tekstowe (nie przejmujemy skrótów). */
-function isEditableTarget(e) {
-  const t = /** @type {any} */ (e.target);
-  if (!t) return false;
-  return t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName);
 }
 
 /**
@@ -26,7 +21,8 @@ function isEditableTarget(e) {
  *
  * @param {{ db: IDBDatabase, token?: string, hostname?: string, getLink?: (t: any) => Promise<any>,
  *   createAudio?: () => any, saveIntervalMs?: number, playerEl?: HTMLElement, doc?: Document,
- *   onTrackChange?: (t: any) => void }} opts
+ *   onTrackChange?: (t: any) => void, getRating?: (key: string) => number | null,
+ *   onRate?: (track: any, stars: number) => void }} opts
  */
 export function mountPlayer({
   db,
@@ -38,6 +34,8 @@ export function mountPlayer({
   playerEl,
   doc = document,
   onTrackChange,
+  getRating,
+  onRate,
 }) {
   const host = playerEl ?? doc.getElementById("player");
   if (!host) throw new Error("mountPlayer: #player not found");
@@ -50,11 +48,17 @@ export function mountPlayer({
   title.id = "ptitle";
   title.textContent = "Nothing selected";
 
-  const stars = doc.createElement("div");
+  const starsCtl = createStarControl({
+    doc,
+    label: "Rating",
+    onRate: (n) => {
+      const t = player.track;
+      if (t && onRate) onRate(t, n);
+    },
+  });
+  const stars = starsCtl.element;
   stars.id = "pstars";
-  stars.className = "row-stars";
-  stars.textContent = "☆☆☆☆☆";
-  stars.title = "Rating — coming in a later ticket";
+  stars.title = "Rating (1–5, 0 clears)";
 
   // Slot waveformu: placeholder — realny wave po pierwszej ocenie (bilet ocen).
   const waveSlot = doc.createElement("div");
@@ -114,6 +118,8 @@ export function mountPlayer({
 
   // ── stan: playlist do transportu N/P ────────────────────────
   let playlist = /** @type {any[]} */ ([]);
+  let lastStarsKey = /** @type {string | null} */ (null);
+  let lastStarsRating = /** @type {number | null | undefined} */ (undefined);
 
   // <audio> gra przez proxy /stream: bezpośredni link pCloud jest powiązany z IP
   // Workera i w przeglądarce kończy się 410 (patrz worker-proxy.js).
@@ -130,6 +136,13 @@ export function mountPlayer({
     onState(state) {
       title.textContent = state.track ? state.track.name : "Nothing selected";
       btnPlay.textContent = state.playing ? "⏸" : "▶";
+      const key = state.track?.key ?? null;
+      const rating = key && getRating ? getRating(key) : null;
+      if (key !== lastStarsKey || rating !== lastStarsRating) {
+        starsCtl.setRating(rating);
+        lastStarsKey = key;
+        lastStarsRating = rating;
+      }
       // Autoplay po przywróceniu sesji może być zablokowany — podświetl play,
       // żeby „po tapnięciu” Utwór wznowił się od zapisanej pozycji.
       btnPlay.classList.toggle("pulse", state.status === "autoplay-blocked");
@@ -226,6 +239,12 @@ export function mountPlayer({
     },
     get currentTrack() {
       return player.track;
+    },
+    /** Synchronizacja gwiazdek z optimistic/confirmed zapisem (bilet #8). */
+    setRating(key, rating) {
+      if (player.track?.key !== key) return;
+      lastStarsRating = rating;
+      starsCtl.setRating(rating);
     },
     /** Pełny powrót: odczyt store `session` → { trackKey, positionSec } lub null. */
     restore() {

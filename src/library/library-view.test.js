@@ -188,6 +188,7 @@ describe("mountLibraryView — selectKey: sync player → lista (bilet 06)", () 
         fileid: 1,
         name: "a.mp3",
         rocznik: "2001",
+        folderid: "1",
         size: 1,
         modified: 1,
         fingerprint: { size: 1, modified: 1 },
@@ -197,6 +198,7 @@ describe("mountLibraryView — selectKey: sync player → lista (bilet 06)", () 
         fileid: 2,
         name: "b.mp3",
         rocznik: "2002",
+        folderid: "2",
         size: 1,
         modified: 1,
         fingerprint: { size: 1, modified: 1 },
@@ -272,6 +274,7 @@ async function seedCache(db, { withTrack2 = true } = {}) {
       fileid: 900,
       name: "t.mp3",
       rocznik: null,
+      folderid: "50",
       size: 1,
       modified: 1,
       fingerprint: { size: 1, modified: 1 },
@@ -283,6 +286,7 @@ async function seedCache(db, { withTrack2 = true } = {}) {
       fileid: 901,
       name: "u.mp3",
       rocznik: null,
+      folderid: "50",
       size: 2,
       modified: 2,
       fingerprint: { size: 2, modified: 2 },
@@ -388,6 +392,114 @@ describe("mountLibraryView — Pełny powrót sesji (bilet 06)", () => {
     expect(
       document.querySelector('.track-row[data-key="pcloud|900"]').classList.contains("sel"),
     ).toBe(true);
+    restoreHeight.mockRestore();
+  });
+});
+
+// ── Bilet 08: zapis oceny — klik gwiazdki / klawisze 1–5/0, optimistic UI ──
+
+/** Minimalne bajty „z chmury” (bez tagu — writer dołoży ID3v2.3). */
+const MP3_BYTES = new Uint8Array([0xff, 0xfb, 0x90, 0x64, 1, 2, 3, 4]);
+
+function ratingIO({ onUpload } = {}) {
+  const uploads = [];
+  return {
+    uploads,
+    io: {
+      fetchBytes: async () => MP3_BYTES,
+      upload: async ({ folderId, filename, bytes }) => {
+        uploads.push({ folderId, filename, size: bytes.length });
+        await onUpload?.(uploads.length);
+        return { fileid: 900, name: filename, size: bytes.length, modified: 20 };
+      },
+      now: () => 7,
+    },
+  };
+}
+
+describe("mountLibraryView — ocena (bilet 08)", () => {
+  it("klik gwiazdki → optimistic synchronicznie; po sukcesie stan potwierdzony i cache", async () => {
+    const restoreHeight = stubListHeight();
+    await seedCache(db);
+    /** @type {any} */
+    let release;
+    const { io, uploads } = ratingIO({
+      onUpload: () => new Promise((r) => (release = r)),
+    });
+    const changes = [];
+    const played = [];
+    const api = await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+      onPlay: (t) => played.push(t.key),
+      onRatingChange: (key, state) => changes.push({ key, ...state }),
+      ratingIO: io,
+    });
+
+    const row = document.querySelector('.track-row[data-key="pcloud|900"]');
+    row.querySelector('.star-btn[data-star="4"]').click();
+
+    // Optimistic: mapa, DOM i pending — jeszcze przed fetch/uploadem.
+    expect(api.getRating("pcloud|900")).toBe(4);
+    expect(played).toEqual([]); // klik gwiazdki nie odtwarza wiersza
+    expect([...row.querySelectorAll(".star-btn")].map((b) => b.textContent).join("")).toBe("★★★★☆");
+    expect(changes[0]).toMatchObject({ key: "pcloud|900", rating: 4, pending: true });
+
+    await waitFor(() => uploads.length === 1);
+    expect(uploads[0]).toMatchObject({ folderId: "50", filename: "t.mp3" });
+    release();
+    await waitFor(() => changes.some((c) => c.pending === false && c.rating === 4));
+    const rec = await get(db, STORES.TRACKS, "pcloud|900");
+    expect(rec.rating).toBe(4);
+    expect(rec.fingerprint.modified).toBe(20);
+    restoreHeight.mockRestore();
+  });
+
+  it("klawisze 4 i 0 działają na zaznaczonym Utworze", async () => {
+    const restoreHeight = stubListHeight();
+    await seedCache(db);
+    const { io, uploads } = ratingIO();
+    const api = await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+      ratingIO: io,
+    });
+    api.selectKey("pcloud|900");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "4", bubbles: true }));
+    expect(api.getRating("pcloud|900")).toBe(4);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "0", bubbles: true }));
+    expect(api.getRating("pcloud|900")).toBe(null);
+    await waitFor(() => uploads.length === 2); // kolejność: najpierw 4★, potem usunięcie
+    restoreHeight.mockRestore();
+  });
+
+  it("błąd uploadu → gwiazdki wracają do potwierdzonego stanu, komunikat widoczny", async () => {
+    const restoreHeight = stubListHeight();
+    await seedCache(db);
+    const api = await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+      ratingIO: {
+        fetchBytes: async () => MP3_BYTES,
+        upload: async () => {
+          throw new Error("upload failed");
+        },
+        now: () => 7,
+      },
+    });
+    const row = document.querySelector('.track-row[data-key="pcloud|900"]');
+    row.querySelector('.star-btn[data-star="5"]').click();
+    expect(api.getRating("pcloud|900")).toBe(5);
+    await waitFor(() => api.getRating("pcloud|900") === null);
+    expect(row.querySelector(".star-btn[data-star='5']").textContent).toBe("☆");
+    expect(document.getElementById("rating-note").hidden).toBe(false);
+    expect(document.getElementById("rating-note").textContent).toContain("upload failed");
     restoreHeight.mockRestore();
   });
 });

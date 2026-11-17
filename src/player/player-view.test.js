@@ -225,3 +225,18 @@ describe("tytuł i czas", () => {
     expect(a.paused).toBe(false);
   });
 });
+
+describe("mountPlayer — gwiazdki oceny (bilet 08)", () => {
+  it("pokazuje ocenę z cache i klik gwiazdki woła onRate(track, n)", async () => {
+    const rated = [];
+    const view = mount({
+      getRating: (key) => (key === "pcloud|1" ? 4 : null),
+      onRate: (t, n) => rated.push([t.key, n]),
+    });
+    await view.play(TRACK);
+    const buttons = [...document.querySelectorAll("#pstars .star-btn")];
+    expect(buttons.map((b) => b.textContent).join("")).toBe("★★★★☆");
+    buttons[2].click();
+    expect(rated).toEqual([["pcloud|1", 3]]);
+  });
+});
