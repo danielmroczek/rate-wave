@@ -123,6 +123,24 @@ describe("fetchTrackStream", () => {
     expect(res.status).toBe(206);
   });
 
+  it("200 z JSON pCloud (błąd getfilelink w /stream) → błąd zamiast bajtów JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ result: 2094, error: "Invalid 'access_token' provided." }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+    );
+    const err = await fetchTrackStream({ token: "bad", fileid: 1 }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.isAuthError).toBe(true);
+    expect(err.message).toMatch(/2094/);
+  });
+
   it("przekłada błędy proxy na ProxyError", async () => {
     vi.stubGlobal(
       "fetch",

@@ -91,7 +91,31 @@ export async function fetchTrackStream({ token, fileid, path, hostname, range, c
     }
     throw new ProxyError(code, res.status);
   }
+  await throwIfPcloudJsonError(res);
   return res;
+}
+
+/**
+ * `/stream` w trybie fileid potrafi zwrócić 200 z JSON-em pCloud, gdy getfilelink
+ * zwrócił błąd (result != 0) — czytelnik bajtów musi to zobaczyć jako błąd,
+ * a nie sparsować JSON jako audio (bilet #8: zapis oceny).
+ * @param {Response} res
+ */
+async function throwIfPcloudJsonError(res) {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) return;
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new ProxyError("unexpected_json", 502);
+  }
+  if (data && typeof data.result === "number") {
+    const e = new Error(`pCloud stream error ${data.result}: ${data.error || "unknown"}`);
+    e.isAuthError = data.result >= 2000 && data.result <= 2099;
+    throw e;
+  }
+  throw new ProxyError(String(data?.error ?? "unexpected_json"), 502);
 }
 
 /**
@@ -115,6 +139,7 @@ export async function fetchTrackBytes(fileUrl, { range } = {}) {
     }
     throw new ProxyError(code, res.status);
   }
+  await throwIfPcloudJsonError(res);
   return res;
 }
 
