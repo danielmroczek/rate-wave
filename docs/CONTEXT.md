@@ -44,6 +44,10 @@ _Avoid_: login, konfiguracja
 Po ponownym wejściu aplikacja przywraca wszystko: Źródła, bibliotekę z cache, ostatni Utwór i pozycję. Gdy ostatni Utwór zniknął — degradacja: zaznaczenie listy, potem brak zaznaczenia.
 _Avoid_: resume, restore
 
+**Wylogowanie (Sign out)**:
+Jawna akcja użytkownika: unieważnienie tokena OAuth po stronie pCloud (`deletetoken`, best-effort) i usunięcie lokalnej kopii tokena oraz rekordu źródła (wraz z wyborem folderu, bo należy do konta). Różne od „Wyczyść wszystkie dane”, które usuwa całą bazę i localStorage.
+_Avoid_: logout, reset konta
+
 **LWW (Last-Write-Wins)**:
 Polityka konfliktów, także między kartami: wygrywa ostatni zapis, bez ostrzeżeń. Historię w pCloud niesie rewizja pliku; w IndexedDB kopii nie ma.
 _Avoid_: merge, rozwiązywanie konfliktów

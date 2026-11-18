@@ -280,7 +280,7 @@ workers/
 ## 12. Otwarte szczegóły (do rozstrzygnięcia w fazie build, nie blokują)
 
 1. **TXXX BPM:** description (`bpm` vs `fBPM` vs `TAP-bpm`) i format wartości (int vs `a.bb`) — przyjmujemy match na najczęsty format; konsistency z TXXX replaygain (małe litery).
-2. **Cloudflare Worker dokładna lokalizacja/passthrough** — routing do `getfilelink` passthrough i stream; hosta workera (workers.dev vs custom subdomain) zależnie od pierwszej próby. Tylko read-no-token? (getfilelink wymaga auth — Worker trzyma token server-side LUB passthrough z URL-worker + auth w query — bezpieczne, bo to jego efemeryczny link).
+2. **Cloudflare Worker dokładna lokalizacja/passthrough** — routing do `getfilelink` passthrough i stream; hosta workera (workers.dev vs custom subdomain) zależnie od pierwszej próby. **Rozstrzygnięte (#5, #18):** worker jest bezstanowy i działa z tożsamością użytkownika (passthrough); klienci JS wysyłają `access_token` w body POST (`/getfilelink`, `/stream`, `/head`). Playback pobiera Utwór POST-em jako Blob i gra z Blob URL-a, więc bieżąca aplikacja nie umieszcza tokena w żadnym URL-u. Szczegóły: [ADR 0001](adr/0001-read-proxy-auth.md).
 3. **Odtwarzanie w tle na Androidzie** — Media Session API (metadane na lockscreen, sterowanie z powiadomienia) jako nice-to-have; brak blokady dla MVP.
 4. **Gold-file testy interopu** (Mp3tag/Explorer/foobar2000/Poweramp/Musicolet) — przed pierwszym realnym uploadem; plan w `research/popm-interop-matrix.md` §"Plan weryfikacji empirycznej".
 5. **Format `fingerprint.modified`** w pCloud: RFC 2822 vs unix ts (`timeformat=timestamp`) — bierzemy `timeformat=timestamp`.

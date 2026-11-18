@@ -36,10 +36,12 @@ with the caller's identity. This exposes the token in the worker's own URL
 
 ## Konsekwencje
 
-- Worker contract: `GET /getfilelink?…&access_token=…` returns the pCloud JSON
-  with the file link (used directly by `<audio>`), `GET /stream?url=…` streams
-  bytes with per-origin `Access-Control-Allow-Origin` (fetch-reads: tags,
-  waveform, ReplayGain, rating rewrite).
+- Worker contract (po #18): `POST /getfilelink` (form body) returns the pCloud
+  JSON with the file link, `POST /stream` (form body) streams bytes with
+  per-origin `Access-Control-Allow-Origin` (fetch-reads: tags, waveform,
+  ReplayGain, rating rewrite, playback Blob), `GET /stream?url=…` streams a
+  known link, and legacy `GET /stream?fileid=…&access_token=…` remains only for
+  pre-#18 PWA clients.
 - Rate limiting (`≤12 outstanding getfilelink`; podniesione z 10 przy #19 —
   /head używa 12 równoległych fetchy, pomiar: brak 429 do 30 równoległych)
   is enforced in-memory per
@@ -54,22 +56,35 @@ with the caller's identity. This exposes the token in the worker's own URL
   (~85% measured success; `downloadfile` is not a fallback — result 1040).
   Evidence: [probe research](../research/probe-origin-read-proxy.md).
 
-## Wariant docelowy (opcjonalne TODO): token w POST body
+## Aktualizacja 2026-11-18 (#18): token w POST body
 
-Obecny passthrough w query string jest akceptowalny (HTTPS + brak logowania
-query + token nigdy nie ląduje na URL-ach hostów plików), ale można go wyciąć
-z URL-i całkowicie:
+Token nie jest już wysyłany w query przez klientów JS. Wdrożono wariant
+docelowy:
 
-- `POST /stream` i `POST /getfilelink` z tokenem w **body**
-  (`application/x-www-form-urlencoded`);
-- to **simple request** per CORS — bez preflightu, więc `fetch` z przeglądarki
-  nadal działa wprost;
-- pCloud `eapi` akceptuje POST z parametrami w body, więc passthrough po
-  stronie workera zostaje 1:1.
+- `POST /getfilelink` i `POST /stream` przyjmują parametry (w tym
+  `access_token`) w **body** `application/x-www-form-urlencoded`;
+  `POST` z innym `Content-Type` jest odrzucany (`unsupported_content_type`),
+  więc token nie może wrócić do query stringa;
+- `/getfilelink` i `/head` są **POST-only**; `/head` przyjmuje `access_token`
+  w JSON body (`{"fileids":[…],"access_token":"…"}`, migracja zapowiedziana
+  w bilecie #19);
+- pCloud `eapi` akceptuje POST z parametrami w body, więc passthrough zostaje
+  1:1; POST z form-urlencoded jest CORS **simple request** (preflight tylko
+  wtedy, gdy klient dokłada nagłówek `Range`, co worker i tak obsługuje);
+- `<audio src>` nie potrafi wysłać POST-a, więc odtwarzanie **nie używa już
+  URL-a proxy z tokenem**: `fetchTrackBlob` pobiera cały Utwór przez
+  `POST /stream`, a player gra z Blob URL-a (pliki są małe, średnio ~1,6 MB).
+  Dzięki temu bieżąca aplikacja nie umieszcza tokena w żadnym URL-u.
 
-Nieinwazyjna rozszerzona twardnienie do rozważenia razem z tym wariantem:
-- przycisk rewokacji tokena w UI (`deletetoken` API);
-- jawny komunikat, że token żyje w `localStorage` (bez refresha — tokeny
-  OAuth pCloud nie wygasają, [research](../research/pcloud-api.md)).
+**Legacy:** `GET /stream?fileid=…&access_token=…` zostaje w workerze wyłącznie
+dla starych wersji PWA w cache'ach przeglądarek. Nowe klienty go nie używają;
+usunąć po przejściu cache rollover. Token nigdy nie trafia na URL-e hostów
+plików pCloud i nie jest logowany.
 
-Status: **nie zaplanowane do biletu 05**; osobny bilet: [#18](https://github.com/danielmroczek/rate-wave/issues/18).
+Dodatkowe twardnienie z biletu #18:
+
+- UI „Sign out” (`auth-flow.signOut`) woła `deletetoken` (best-effort, token
+  z IDB albo fallback z localStorage), a następnie usuwa lokalną kopię tokena
+  (localStorage + mirror IDB) i cały rekord źródła wraz z wyborem folderu;
+- udokumentowano, że token żyje w `localStorage` i nie wygasa (brak refresha —
+  [research](../research/pcloud-api.md)); „Clear all data” czyści oba magazyny.
