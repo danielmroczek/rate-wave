@@ -3,9 +3,15 @@
 // obsługę powrotu z OAuth (token z localStorage po redirect).
 
 import { buildAuthUrl, verifyState } from "./oauth.js";
-import { loadTokenFromLS, saveToken, clearToken, PCLOUD_SOURCE_KEY } from "./token-store.js";
+import {
+  loadTokenFromDB,
+  loadTokenFromLS,
+  saveToken,
+  clearToken,
+  PCLOUD_SOURCE_KEY,
+} from "./token-store.js";
 import { get, STORES } from "../store/db.js";
-import { validateToken } from "./pcloud-api.js";
+import { revokeToken, validateToken } from "./pcloud-api.js";
 
 /** @typedef {"idle"|"checking"|"login"|"authenticating"|"connected"} AuthState */
 
@@ -27,6 +33,28 @@ export function startOAuthLogin() {
   const url = buildAuthUrl();
   console.log("[auth] Redirecting to pCloud OAuth…");
   globalThis.location.href = url;
+}
+
+/**
+ * Wylogowanie (#18): unieważnia token po stronie pCloud (best-effort), czyści
+ * localStorage + mirror IDB i usuwa rekord źródła wraz z wyborem folderu
+ * (jest związany z kontem). Token bierzemy z IDB, a gdy mirror nie istnieje —
+ * z localStorage. Nie rzuca, gdy pCloud nie potwierdzi rewokacji.
+ * @param {{ db?: IDBDatabase }} [opts]
+ * @returns {Promise<void>}
+ */
+export async function signOut({ db } = {}) {
+  const fromDB = db ? await loadTokenFromDB(db).catch(() => null) : null;
+  const creds = fromDB?.token ? fromDB : loadTokenFromLS();
+  if (creds?.token) {
+    try {
+      await revokeToken({ token: creds.token, hostname: creds.hostname });
+    } catch (err) {
+      console.warn("[auth] token revoke failed — clearing locally anyway", err?.message ?? err);
+    }
+  }
+  await clearToken({ db, purgeSource: true });
+  currentAuthState = "idle";
 }
 
 /**

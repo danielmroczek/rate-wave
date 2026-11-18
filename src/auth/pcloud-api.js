@@ -128,6 +128,17 @@ function toEpochSeconds(value, fallback) {
 }
 
 /**
+ * Unieważnia token OAuth po stronie pCloud (`deletetoken`, #18). Wywoływane
+ * przez „Sign out”; lokalne dane czyścimy niezależnie od wyniku (best-effort).
+ * @param {{ token: string, hostname?: string }} opts
+ * @returns {Promise<void>}
+ */
+export async function revokeToken({ token, hostname }) {
+  if (!token) throw new Error("revokeToken: token required");
+  await pcloudApi({ method: "deletetoken", token, hostname });
+}
+
+/**
  * Waliduje token przez `userinfo`. Zwraca dane użytkownika lub rzuca błąd.
  * @param {{ token: string, hostname: string }} opts
  * @returns {Promise<{ userid: number, email: string, name: string }>}

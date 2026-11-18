@@ -1,7 +1,7 @@
 // Klient zapisu oceny (bilet #8): POST uploadfile z multipart + overwrite.
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { uploadFileOverwrite } from "./pcloud-api.js";
+import { uploadFileOverwrite, revokeToken } from "./pcloud-api.js";
 
 const BYTES = new Uint8Array([0x49, 0x44, 0x33, 1, 2, 3]);
 
@@ -25,6 +25,30 @@ function jsonResponse(body, status = 200) {
     headers: { "content-type": "application/json" },
   });
 }
+
+describe("revokeToken", () => {
+  it("woła deletetoken z tokenem", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ result: 0 }));
+    await expect(
+      revokeToken({ token: "tok", hostname: "eapi.pcloud.com" }),
+    ).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    const parsed = new URL(String(url));
+    expect(parsed.origin + parsed.pathname).toBe("https://eapi.pcloud.com/deletetoken");
+    expect(parsed.searchParams.get("access_token")).toBe("tok");
+    expect(init).toBeUndefined();
+  });
+
+  it("błąd pCloud propaguje (caller czyści lokalny token i tak)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ result: 1000, error: "Log in required." }));
+    await expect(revokeToken({ token: "tok" })).rejects.toThrow(/1000/);
+  });
+
+  it("bez tokena → błąd, bez wywołania sieciowego", async () => {
+    await expect(revokeToken({ token: "" })).rejects.toThrow(/token required/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("uploadFileOverwrite", () => {
   it("wysyła access_token, folderid i nopartial=1 w query; nazwa pliku tylko w polu plikowym", async () => {

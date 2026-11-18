@@ -2,7 +2,7 @@
 // (SW nie widzi localStorage — mirror jest konieczny dla Background Sync / flush-ratings).
 // Bilet 03, spec §3a + §7.
 
-import { get, put, STORES } from "../store/db.js";
+import { del, get, put, STORES } from "../store/db.js";
 
 /** Klucz localStorage — jeden na całą apkę (single-source MVP). */
 const LS_TOKEN_KEY = "rate-wave.pcloud.token";
@@ -85,14 +85,21 @@ export async function loadTokenFromDB(db) {
 }
 
 /**
- * Usuwa token z localStorage i IDB (ciche czyszczenie po nieudanej walidacji userinfo).
- * @param {{ db: IDBDatabase, localStorage?: Storage }} params
+ * Usuwa token z localStorage i IDB (ciche czyszczenie po nieudanej walidacji
+ * userinfo albo jawny „Sign out”). `purgeSource` usuwa cały rekord źródła —
+ * łącznie z wyborem folderu głównego, który jest związany z kontem.
+ * @param {{ db?: IDBDatabase, purgeSource?: boolean, localStorage?: Storage }} params
  */
-export async function clearToken({ db, localStorage: ls } = {}) {
+export async function clearToken({ db, purgeSource = false, localStorage: ls } = {}) {
   const storage = _ls(ls);
   storage.removeItem(LS_TOKEN_KEY);
   storage.removeItem(LS_HOSTNAME_KEY);
   storage.removeItem(LS_LOCATIONID_KEY);
+  if (!db) return;
+  if (purgeSource) {
+    await del(db, STORES.SOURCES, PCLOUD_SOURCE_KEY);
+    return;
+  }
   const existing = await get(db, STORES.SOURCES, PCLOUD_SOURCE_KEY);
   if (existing) {
     delete existing.token;

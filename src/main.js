@@ -3,7 +3,13 @@
 // Bilet 03: OAuth implicit login pCloud + walidacja tokenu przy starcie.
 import "./theme.css";
 import { openDB, resetAllData } from "./store/db.js";
-import { initAuth, handleOAuthReturn, startOAuthLogin, getAuthState } from "./auth/auth-flow.js";
+import {
+  initAuth,
+  handleOAuthReturn,
+  startOAuthLogin,
+  getAuthState,
+  signOut,
+} from "./auth/auth-flow.js";
 import { loadTokenFromDB } from "./auth/token-store.js";
 import { mountLibraryView, unmountLibraryView } from "./library/library-view.js";
 import { mountPlayer } from "./player/player-view.js";
@@ -109,6 +115,14 @@ async function boot() {
   if (getAuthState() === "idle") {
     renderAuthState("login");
   }
+
+  // 2c. „Sign out": unieważnienie tokena po stronie pCloud (best-effort) +
+  // usunięcie lokalnej kopii. Token OAuth pCloud nie wygasa sam (#18).
+  document.getElementById("btn-signout")?.addEventListener("click", async () => {
+    if (!globalThis.confirm("Sign out of pCloud on this device?")) return;
+    await signOut({ db });
+    location.reload();
+  });
 
   // 3. „Wyczyść wszystkie dane": deleteDB + localStorage.clear() z potwierdzeniem.
   const dlg = /** @type {HTMLDialogElement} */ (document.getElementById("dlg-reset"));

@@ -19,7 +19,7 @@ import {
   PCLOUD_SOURCE_KEY,
 } from "./token-store.js";
 import { pcloudApi, validateToken } from "./pcloud-api.js";
-import { put, STORES } from "../store/db.js";
+import { get, put, STORES } from "../store/db.js";
 
 // ── Pomocnicze ──
 
@@ -201,6 +201,22 @@ describe("token-store.js — saveToken + loadTokenFromLS", () => {
     expect(loadTokenFromLS(localStorage)).toBeNull();
     const fromDB = await loadTokenFromDB(db);
     expect(fromDB).toBeNull();
+  });
+
+  it("clearToken z purgeSource usuwa też wybór folderu (Sign out)", async () => {
+    await saveToken({
+      db,
+      token: "todelete",
+      hostname: "api.pcloud.com",
+      locationid: 1,
+      folderId: "7",
+      folderName: "Muzyka",
+      localStorage,
+    });
+    await clearToken({ db, purgeSource: true, localStorage });
+
+    expect(loadTokenFromLS(localStorage)).toBeNull();
+    expect(await get(db, STORES.SOURCES, PCLOUD_SOURCE_KEY)).toBeUndefined();
   });
 
   it("loadTokenFromDB zwraca null gdy brak rekordu", async () => {
