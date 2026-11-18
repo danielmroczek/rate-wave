@@ -1,7 +1,9 @@
-// rate-wave READ-PROXY (bilet 05, ADR 0001): passthrough getfilelink + bajty z ACAO.
-// Worker bezstanowy — token użytkownika przychodzi w query (passthrough), nigdy
-// nie jest logowany ani przekazywany poza pCloud. Logujemy tylko metodę, ścieżkę
-// i wynik — NIGDY query-string.
+// rate-wave READ-PROXY (bilet 05, ADR 0001, bilet #18): passthrough getfilelink
+// + bajty z ACAO. Worker bezstanowy — token użytkownika przychodzi w body POST
+// (form-urlencoded; JSON dla /head). GET z tokenem w query zostaje tylko jako
+// legacy dla starych wersji PWA na /stream. Token nigdy nie jest logowany ani
+// przekazywany poza pCloud. Logujemy metodę, ścieżkę i wynik — NIGDY
+// query-stringa ani body.
 
 const API_HOSTS = new Set(["eapi.pcloud.com", "api.pcloud.com"]);
 const PCLOUD_HOST_RE = /\.pcloud\.com$/;
@@ -16,15 +18,24 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") return preflight(request, env);
-    if (url.pathname === "/head" && request.method === "POST") return handleHead(request, env, url);
+    if (url.pathname === "/head" && request.method === "POST") return handleHead(request, env);
     if (url.pathname === "/head")
       return jsonError(405, "method_not_allowed", corsHeaders(request, env));
-    if (request.method !== "GET")
+
+    // #18: token w body POST. GET zostaje tylko na /stream (wsteczna zgodność
+    // dla `<audio src>` w starych wersjach PWA); nowe klienty czytają bajty POST-em.
+    if (request.method !== "GET" && request.method !== "POST")
       return jsonError(405, "method_not_allowed", corsHeaders(request, env));
 
-    if (url.pathname === "/getfilelink") return handleGetFileLink(request, env, url);
+    if (url.pathname === "/getfilelink") {
+      if (request.method !== "POST")
+        return jsonError(405, "method_not_allowed", corsHeaders(request, env));
+      return handleGetFileLink(request, env, url);
+    }
     if (url.pathname === "/stream") return handleStream(request, env, url);
     if (url.pathname === "/health") {
+      if (request.method !== "GET")
+        return jsonError(405, "method_not_allowed", corsHeaders(request, env));
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: {
@@ -45,17 +56,20 @@ const HEAD_CONCURRENCY = 12; // 429 too_many_getfilelink nie występuje do 30 r�
 const HEAD_RANGE = "bytes=0-8191"; // 8 KB: 2× margines nad gorszy przypadek tagu (~4190 B)
 const HEAD_SUBREQUEST_BUDGET = 46; // < 50 (limit planu); zwrot linii budget_exhausted zamiast platformowego błędu
 
-async function handleHead(request, env, url) {
+async function handleHead(request, env) {
   const cors = corsHeaders(request, env);
-  const token = url.searchParams.get("access_token");
-  if (!token) return jsonError(400, "missing_access_token", cors);
 
-  let fileids;
+  let body;
   try {
-    fileids = (await request.json())?.fileids;
+    body = await request.json();
   } catch {
     return jsonError(400, "bad_json", cors);
   }
+  // #18: token wyłącznie w JSON body.
+  const token = body?.access_token;
+  if (!token) return jsonError(400, "missing_access_token", cors);
+
+  const fileids = body?.fileids;
   if (
     !Array.isArray(fileids) ||
     fileids.length === 0 ||
@@ -139,10 +153,33 @@ async function headBytes(token, fileid, budget) {
   throw { code: "pcloud_link_unavailable" };
 }
 
+// Parametry żądania: query wyłącznie dla GET (`/stream?url=` i wsteczna
+// zgodność `<audio src>`), form-urlencoded body dla POST (#18). JSON ma osobną
+// ścieżkę (/head). POST bez form-urlencoded jest odrzucany — żeby token nie
+// mógł wrócić do query stringa. Nie logujemy ani nie odbijamy treści body.
+async function requestParams(request, url) {
+  if (request.method === "GET") return { params: url.searchParams, errorCode: null };
+  const contentType = request.headers.get("Content-Type") ?? "";
+  if (!contentType.includes("application/x-www-form-urlencoded")) {
+    return { params: null, errorCode: "unsupported_content_type" };
+  }
+  try {
+    const form = await request.formData();
+    const params = new URLSearchParams();
+    for (const [key, value] of form) {
+      if (typeof value === "string") params.set(key, value);
+    }
+    return { params, errorCode: null };
+  } catch {
+    return { params: null, errorCode: "bad_form" };
+  }
+}
+
 // === /getfilelink: wywołanie eapi i zwrot JSON z linkiem (app używa go dla <audio>) ===
 async function handleGetFileLink(request, env, url) {
   const cors = corsHeaders(request, env);
-  const params = url.searchParams;
+  const { params, errorCode } = await requestParams(request, url);
+  if (errorCode) return jsonError(400, errorCode, cors);
   const token = params.get("access_token");
   if (!token) return jsonError(400, "missing_access_token", cors);
 
@@ -223,14 +260,16 @@ async function callGetFileLink(token, { fileid, path, hostname, forcedownload, c
 async function handleStream(request, env, url) {
   const range = request.headers.get("Range");
   const cors = corsHeaders(request, env);
+  const { params, errorCode } = await requestParams(request, url);
+  if (errorCode) return jsonError(400, errorCode, cors);
 
-  const target = url.searchParams.get("url");
-  const fileid = url.searchParams.get("fileid");
-  const path = url.searchParams.get("path");
+  const target = params.get("url");
+  const fileid = params.get("fileid");
+  const path = params.get("path");
   if (!target && !fileid && !path) return jsonError(400, "missing_url", cors);
 
   if (!target) {
-    const token = url.searchParams.get("access_token");
+    const token = params.get("access_token");
     if (!token) return jsonError(400, "missing_access_token", cors);
 
     // Link plikowy pCloud jest powiązany z IP, które wygenerowało getfilelink
@@ -243,9 +282,9 @@ async function handleStream(request, env, url) {
       const outcome = await callGetFileLink(token, {
         fileid,
         path,
-        hostname: url.searchParams.get("hostname"),
-        forcedownload: url.searchParams.get("forcedownload"),
-        contenttype: url.searchParams.get("contenttype"),
+        hostname: params.get("hostname"),
+        forcedownload: params.get("forcedownload"),
+        contenttype: params.get("contenttype"),
       });
       if (outcome instanceof Response) {
         // Błąd walidacji / 429 — przepisz odpowiedź z ACAO.

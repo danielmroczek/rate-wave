@@ -2,7 +2,7 @@
 // Testy widoku playera (bilet 06): struktura wg prototypu, scrubbing klik/drag,
 // Space/N/P + brak kolizji z polami tekstowymi, waveform placeholder.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { openDB } from "../store/db.js";
 import { mountPlayer } from "./player-view.js";
@@ -63,12 +63,32 @@ const TRACK = { key: "pcloud|1", fileid: 1, name: "A.mp3" };
 const TRACK2 = { key: "pcloud|2", fileid: 2, name: "B.mp3" };
 
 describe("mountPlayer — struktura (prototyp player-ux)", () => {
-  it("domyślnie gra przez proxy /stream (getLink → { link }, string skrzynkowany w obiekt)", async () => {
+  it("domyślnie pobiera Utwór POST-em i gra z Blob URL-a (token nie trafia do URL-a)", async () => {
     const log = [];
-    const view = mount({ getLink: undefined, createAudio: factoryWithLog(log) });
-    await view.play(TRACK);
-    expect(log.at(-1).src).toContain("/stream");
-    expect(log.at(-1).src).toContain("fileid=1");
+    const realFetch = globalThis.fetch;
+    const realCreate = URL.createObjectURL;
+    const realRevoke = URL.revokeObjectURL;
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(new Blob(["ID3"], { type: "audio/mpeg" }), {
+        status: 200,
+        headers: { "content-type": "audio/mpeg" },
+      }),
+    );
+    URL.createObjectURL = vi.fn(() => "blob:track-1");
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const view = mount({ getLink: undefined, createAudio: factoryWithLog(log) });
+      await view.play(TRACK);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/stream"),
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(log.at(-1).src).toBe("blob:track-1");
+    } finally {
+      globalThis.fetch = realFetch;
+      URL.createObjectURL = realCreate;
+      URL.revokeObjectURL = realRevoke;
+    }
   });
 
   it("ma tytuł, gwiazdki, transport, czas i duży slot waveformu (jeden pasek scrubbingu)", () => {

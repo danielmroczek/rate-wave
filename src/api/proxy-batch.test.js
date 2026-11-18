@@ -32,15 +32,21 @@ describe("splitBatches", () => {
 });
 
 describe("fetchHeadBatch", () => {
-  it("parsuje NDJSON: ok → bajty, error → code", async () => {
-    globalThis.fetch = async () =>
-      ndjsonResponse([
+  it("parsuje NDJSON: ok → bajty, error → code; token w body (nie w URL)", async () => {
+    /** @type {any} */
+    let captured;
+    globalThis.fetch = async (url, init) => {
+      captured = { url: String(url), init };
+      return ndjsonResponse([
         '{"fileid":1,"status":"ok","bytesBase64":"AAEC"}',
         '{"fileid":2,"status":"error","code":"too_many_getfilelink"}',
       ]);
+    };
     const r = await fetchHeadBatch({ token: "t", fileids: [1, 2] });
     expect(r.get(1)).toEqual({ status: "ok", bytes: new Uint8Array([0, 1, 2]) });
     expect(r.get(2)).toEqual({ status: "error", code: "too_many_getfilelink" });
+    expect(new URL(captured.url).searchParams.get("access_token")).toBeNull();
+    expect(JSON.parse(captured.init.body)).toEqual({ fileids: [1, 2], access_token: "t" });
   });
 
   it("linia przecięta chunkami streamu nadal sparsowana (incr. decodowanie)", async () => {

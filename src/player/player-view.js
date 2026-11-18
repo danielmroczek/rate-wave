@@ -5,7 +5,7 @@
 // obok aktualny czas.
 
 import { createPlayer, loadSession } from "./player-state.js";
-import { trackStreamUrl } from "../api/worker-proxy.js";
+import { fetchTrackBlob } from "../api/worker-proxy.js";
 import { createStarControl } from "../ratings/star-control.js";
 import { isEditableTarget } from "../ui/keyboard.js";
 
@@ -17,7 +17,7 @@ export function formatTime(sec) {
 
 /**
  * Montuje player w `#player`. Zwraca API: play(track, opts), setPlaylist(tracks),
- * dispose(). `getLink` injectable (domyślnie READ-PROXY getTrackLink).
+ * dispose(). `getLink` injectable (domyślnie POST /stream → Blob URL).
  *
  * @param {{ db: IDBDatabase, token?: string, hostname?: string, getLink?: (t: any) => Promise<any>,
  *   createAudio?: () => any, saveIntervalMs?: number, playerEl?: HTMLElement, doc?: Document,
@@ -121,12 +121,24 @@ export function mountPlayer({
   let lastStarsKey = /** @type {string | null} */ (null);
   let lastStarsRating = /** @type {number | null | undefined} */ (undefined);
 
-  // <audio> gra przez proxy /stream: bezpośredni link pCloud jest powiązany z IP
-  // Workera i w przeglądarce kończy się 410 (patrz worker-proxy.js).
-  // getLink zwraca { link } — kontrakt player-state; pudełkowanie stringa w
-  // obiekt chroni przed destrukturyzacją metod String.prototype (np. `link`).
+  // <audio> gra z Blob URL-a: bajty pobiera POST /stream (token w body, nigdy
+  // w URL-u). Blob trzymamy do zmiany Utworu i zwalniamy w dispose.
+  let audioObjectUrl = /** @type {string | null} */ (null);
+  let linkQueue = Promise.resolve();
   const link =
-    getLink ?? (async (t) => ({ link: trackStreamUrl({ token, hostname, fileid: t.fileid }) }));
+    getLink ??
+    ((t) => {
+      // Serializacja: szybkie klikanie dwóch Utworów nie może zwolnić URL-a,
+      // którego player właśnie użył (każde pobranie kończy się przed następnym).
+      const run = linkQueue.then(async () => {
+        const blob = await fetchTrackBlob({ token, hostname, fileid: t.fileid });
+        if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
+        audioObjectUrl = URL.createObjectURL(blob);
+        return { link: audioObjectUrl };
+      });
+      linkQueue = run.catch(() => {});
+      return run;
+    });
   const player = createPlayer({
     db,
     getLink: link,
@@ -147,11 +159,13 @@ export function mountPlayer({
       // żeby „po tapnięciu” Utwór wznowił się od zapisanej pozycji.
       btnPlay.classList.toggle("pulse", state.status === "autoplay-blocked");
       note.textContent =
-        state.status === "autoplay-blocked"
-          ? "Playback needs a tap — press play."
-          : (state.status ?? "").startsWith("error:")
-            ? `Playback error: ${state.status.slice("error: ".length)}`
-            : "";
+        state.status === "loading"
+          ? "Loading track…"
+          : state.status === "autoplay-blocked"
+            ? "Playback needs a tap — press play."
+            : (state.status ?? "").startsWith("error:")
+              ? `Playback error: ${state.status.slice("error: ".length)}`
+              : "";
       const dur = state.duration || 0;
       const width = dur > 0 ? `${Math.min(100, (state.position / dur) * 100)}%` : "0%";
       time.textContent = `${formatTime(state.position)} / ${formatTime(dur)}`;
@@ -254,6 +268,8 @@ export function mountPlayer({
       doc.removeEventListener("keydown", onKey);
       doc.defaultView?.removeEventListener("beforeunload", onBeforeUnload);
       player.pause();
+      if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
+      audioObjectUrl = null;
       host.innerHTML = "";
     },
   };

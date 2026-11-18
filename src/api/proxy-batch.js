@@ -47,10 +47,11 @@ export async function fetchHeadBatch({ token, fileids, signal, onLine }) {
   if (!fileids.length || fileids.length > HEAD_BATCH_CAP) {
     throw new Error(`fetchHeadBatch: 1..${HEAD_BATCH_CAP} fileids required`);
   }
-  const res = await fetch(`${PROXY_BASE_URL}/head?access_token=${encodeURIComponent(token)}`, {
+  // #18: token w body, nie w query.
+  const res = await fetch(`${PROXY_BASE_URL}/head`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ fileids }),
+    body: JSON.stringify({ fileids, access_token: token }),
     signal,
   });
   if (!res.ok) {

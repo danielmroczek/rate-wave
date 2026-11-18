@@ -1,7 +1,7 @@
 // Klient READ-PROXY (bilet 05, spec §8: api/worker-proxy.js).
-// <audio> gra przez /stream (link pCloud jest powiązany z IP Workera —
-// bezpośredni link w przeglądarce → 410). /getfilelink zostaje passthrough
-// do odczytu metadanych / zapisu tagów z użyciem linku na stronie workera.
+// Wszystkie odczyty bajtów i /getfilelink wysyłają token w body POST (#18).
+// Playback nie wystawia tokena w URL-u: `fetchTrackBlob` pobiera bajty POST-em,
+// a `<audio>` gra z Blob URL-a.
 
 /**
  * Baza URL READ-PROXY (współdzielona przez worker-proxy + proxy-batch).
@@ -18,21 +18,16 @@ export class ProxyError extends Error {
 }
 
 /**
- * Buduje URL /stream proxy do użycia jako <audio src>. Nie zwraca bezpośredniego
- * linku pCloud, bo ten jest powiązany z IP Workera („generated for another IP"
- * → 410 w przeglądarce); /stream generuje link i czyta bajty w jednym wywołaniu.
- * @param {{ token: string, fileid?: string|number, path?: string, hostname?: string, contenttype?: string }} opts
- * @returns {string}
+ * Form-urlencoded body dla POST-ów proxy (#18) — token nie trafia do URL-a.
+ * @param {Record<string, string|number|undefined|null>} fields
+ * @returns {URLSearchParams}
  */
-export function trackStreamUrl({ token, fileid, path, hostname, contenttype }) {
-  if (!fileid && !path) throw new Error("trackStreamUrl: fileid or path required");
-  const url = new URL(`${PROXY_BASE_URL}/stream`);
-  url.searchParams.set("access_token", token);
-  if (fileid != null) url.searchParams.set("fileid", String(fileid));
-  if (path) url.searchParams.set("path", path);
-  if (hostname) url.searchParams.set("hostname", hostname);
-  if (contenttype) url.searchParams.set("contenttype", contenttype);
-  return url.href;
+function formBody(fields) {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value != null) body.set(key, String(value));
+  }
+  return body;
 }
 
 /**
@@ -42,14 +37,10 @@ export function trackStreamUrl({ token, fileid, path, hostname, contenttype }) {
  */
 export async function getTrackLink({ token, fileid, path, hostname, contenttype }) {
   if (!fileid && !path) throw new Error("getTrackLink: fileid or path required");
-  const url = new URL(`${PROXY_BASE_URL}/getfilelink`);
-  url.searchParams.set("access_token", token);
-  if (fileid != null) url.searchParams.set("fileid", String(fileid));
-  if (path) url.searchParams.set("path", path);
-  if (hostname) url.searchParams.set("hostname", hostname);
-  if (contenttype) url.searchParams.set("contenttype", contenttype);
-
-  const res = await fetch(url.href);
+  const res = await fetch(`${PROXY_BASE_URL}/getfilelink`, {
+    method: "POST",
+    body: formBody({ access_token: token, fileid, path, hostname, contenttype }),
+  });
   if (res.status === 429) throw new ProxyError("too_many_getfilelink", 429);
   const data = await res.json();
 
@@ -70,18 +61,17 @@ export async function getTrackLink({ token, fileid, path, hostname, contenttype 
  * losuje się per połączenie — /stream sam generuje link i pobiera bajty
  * w jednym wywołaniu: retry (8 × getfilelink + wszystkie hosty z hosts[]).
  * Skuteczność (zmierzone na produkcji, 27 prób): ~85%; brak rozwiązania na 100%.
+ * Token idzie w form-urlencoded body POST (#18); `Range` — jak dotąd — nagłówkiem.
  * @param {{ token: string, fileid?: string|number, path?: string, hostname?: string, range?: string, contenttype?: string }} opts
  * @returns {Promise<Response>} 200/206 z bajtami (do odczytu przez JS)
  */
 export async function fetchTrackStream({ token, fileid, path, hostname, range, contenttype }) {
   if (!fileid && !path) throw new Error("fetchTrackStream: fileid or path required");
-  const url = new URL(`${PROXY_BASE_URL}/stream`);
-  url.searchParams.set("access_token", token);
-  if (fileid != null) url.searchParams.set("fileid", String(fileid));
-  if (path) url.searchParams.set("path", path);
-  if (hostname) url.searchParams.set("hostname", hostname);
-  if (contenttype) url.searchParams.set("contenttype", contenttype);
-  const res = await fetch(url.href, { headers: range ? { Range: range } : undefined });
+  const res = await fetch(`${PROXY_BASE_URL}/stream`, {
+    method: "POST",
+    body: formBody({ access_token: token, fileid, path, hostname, contenttype }),
+    headers: range ? { Range: range } : undefined,
+  });
   if (!res.ok && res.status !== 206) {
     let code = res.statusText || "proxy_error";
     try {
@@ -93,6 +83,20 @@ export async function fetchTrackStream({ token, fileid, path, hostname, range, c
   }
   await throwIfPcloudJsonError(res);
   return res;
+}
+
+/**
+ * Pobiera cały Utwór przez POST /stream i zwraca Blob do `URL.createObjectURL`.
+ * Odtwarzanie z Blob-a trzyma token poza URL-em (`<audio src>` nie potrafi
+ * wysłać POST-a, więc zamiast URL-a proxy dostaje obiekt w pamięci, #18).
+ * Pliki w bibliotece są małe (średnio ~1,6 MB), więc pełne pobranie jest
+ * akceptowalne; Blob umożliwia też od razu seek po całym materiale.
+ * @param {{ token: string, fileid?: string|number, path?: string, hostname?: string, contenttype?: string }} opts
+ * @returns {Promise<Blob>}
+ */
+export async function fetchTrackBlob(opts) {
+  const res = await fetchTrackStream(opts);
+  return res.blob();
 }
 
 /**

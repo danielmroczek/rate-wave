@@ -36,6 +36,17 @@ function req(path, { origin = ORIGIN, headers = {}, method = "GET" } = {}) {
   return new Request("https://rw-proxy.test" + path, { headers: h, method });
 }
 
+// POST z form-urlencoded body (#18) — token poza URL-em.
+function reqForm(path, fields, { origin = ORIGIN, headers = {} } = {}) {
+  const h = { ...headers };
+  if (origin) h.Origin = origin;
+  return new Request("https://rw-proxy.test" + path, {
+    method: "POST",
+    headers: h,
+    body: new URLSearchParams(fields),
+  });
+}
+
 test("health odpowiada i dokleja ACAO dla dozwolonego originu", async () => {
   const res = await worker.fetch(req("/health"), ENV);
   assert.equal(res.status, 200);
@@ -54,22 +65,22 @@ test("preflight OPTIONS → 204 z ACAO i nagłówkami Range", async () => {
   assert.match(res.headers.get("Access-Control-Allow-Headers"), /Range/);
 });
 
-test("getfilelink: brak tokena → 400", async () => {
+test("getfilelink: brak tokena → 400, GET → 405 (POST-only)", async () => {
   installMock();
-  const res = await worker.fetch(req("/getfilelink?fileid=123"), ENV);
-  assert.equal(res.status, 400);
+  assert.equal((await worker.fetch(reqForm("/getfilelink", { fileid: "123" }), ENV)).status, 400);
+  assert.equal((await worker.fetch(req("/getfilelink?fileid=123"), ENV)).status, 405);
 });
 
 test("getfilelink: niedozwolony host API → 400", async () => {
   installMock();
   const res = await worker.fetch(
-    req(`/getfilelink?fileid=1&access_token=t&hostname=evil.example`),
+    reqForm("/getfilelink", { fileid: "1", access_token: "t", hostname: "evil.example" }),
     ENV,
   );
   assert.equal(res.status, 400);
 });
 
-test("getfilelink passthrough: JSON pCloud 1:1, token nie w odpowiedzi", async () => {
+test("getfilelink: POST z tokenem w body — URL proxy bez tokena, JSON pCloud 1:1", async () => {
   installMock();
   const upstream = { result: 0, hosts: ["file-u3.pcloud.com"], path: "/x.mp3", expires: 987654321 };
   mockFetch = (url) => {
@@ -80,10 +91,24 @@ test("getfilelink passthrough: JSON pCloud 1:1, token nie w odpowiedzi", async (
     assert.equal(u.searchParams.get("fileid"), "42");
     return Promise.resolve(new Response(JSON.stringify(upstream), { status: 200 }));
   };
-  const res = await worker.fetch(req("/getfilelink?fileid=42&access_token=tok123"), ENV);
+  const request = reqForm("/getfilelink", { fileid: "42", access_token: "tok123" });
+  assert.equal(new URL(request.url).searchParams.get("access_token"), null); // token nie w URL
+  const res = await worker.fetch(request, ENV);
   assert.equal(res.status, 200);
   const body = await res.json();
-  assert.deepEqual(body, upstream); // link + expires przelatują; token jest tylko w URL eapi
+  assert.deepEqual(body, upstream); // link + expires przelatują; token jest tylko w wywołaniu eapi
+});
+
+test("getfilelink: POST bez form-urlencoded nie czyta tokena z query → 400", async () => {
+  installMock();
+  const request = new Request("https://rw-proxy.test/getfilelink?access_token=tok&fileid=1", {
+    method: "POST",
+    headers: { Origin: ORIGIN, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const res = await worker.fetch(request, ENV);
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "unsupported_content_type");
 });
 
 test("getfilelink: błąd pCloud (result!=0) przepuszczany z 200 do decyzji aplikacji", async () => {
@@ -94,7 +119,10 @@ test("getfilelink: błąd pCloud (result!=0) przepuszczany z 200 do decyzji apli
         status: 200,
       }),
     );
-  const res = await worker.fetch(req("/getfilelink?fileid=1&access_token=bad"), ENV);
+  const res = await worker.fetch(
+    reqForm("/getfilelink", { fileid: "1", access_token: "bad" }),
+    ENV,
+  );
   assert.equal(res.status, 200);
   assert.equal((await res.json()).result, 2094);
 });
@@ -109,10 +137,15 @@ test("rate-limit: 13. zaległy getfilelink → 429, po zwolnieniu 429 znika", as
 
   const pending = [];
   for (let i = 0; i < 12; i++)
-    pending.push(worker.fetch(req(`/getfilelink?fileid=${i}&access_token=t`), ENV));
+    pending.push(
+      worker.fetch(reqForm("/getfilelink", { fileid: String(i), access_token: "t" }), ENV),
+    );
   await new Promise((r) => setTimeout(r, 25));
 
-  const rejected = await worker.fetch(req(`/getfilelink?fileid=99&access_token=t`), ENV);
+  const rejected = await worker.fetch(
+    reqForm("/getfilelink", { fileid: "99", access_token: "t" }),
+    ENV,
+  );
   assert.equal(rejected.status, 429);
   assert.equal(await rejected.text(), JSON.stringify({ error: "too_many_getfilelink" }));
 
@@ -125,7 +158,10 @@ test("rate-limit: 13. zaległy getfilelink → 429, po zwolnieniu 429 znika", as
 
   // Po zwolnieniu limitu — mock zwraca od razu.
   mockFetch = () => Promise.resolve(new Response(JSON.stringify({ result: 0 }), { status: 200 }));
-  const again = await worker.fetch(req(`/getfilelink?fileid=99&access_token=t`), ENV);
+  const again = await worker.fetch(
+    reqForm("/getfilelink", { fileid: "99", access_token: "t" }),
+    ENV,
+  );
   assert.equal(again.status, 200);
   await again.text();
 });
@@ -186,7 +222,7 @@ test("stream: pełne bajty (200) bez Range też przepływają", async () => {
   assert.equal(await res.text(), "FULL_MP3_BYTES");
 });
 
-test("stream?fileid: getfilelink i bajty w jednym wywołaniu (IP-binding pCloud)", async () => {
+test("stream: POST z tokenem w body — getfilelink i bajty w jednym wywołaniu", async () => {
   installMock();
   const calls = [];
   mockFetch = (url) => {
@@ -206,12 +242,31 @@ test("stream?fileid: getfilelink i bajty w jednym wywołaniu (IP-binding pCloud)
       new Response("BYTES", { status: 200, headers: { "Content-Type": "audio/mpeg" } }),
     );
   };
-  const res = await worker.fetch(req("/stream?fileid=7&access_token=tok"), ENV);
+  const request = reqForm("/stream", { fileid: "7", access_token: "tok" });
+  assert.equal(new URL(request.url).searchParams.get("access_token"), null); // token nie w URL
+  const res = await worker.fetch(request, ENV);
   assert.equal(res.status, 200);
   assert.equal(await res.text(), "BYTES");
   // dwa upstreamy: getfilelink → download; token tylko w wywołaniu eapi
   assert.equal(calls.length, 2);
   assert.ok(!calls[1].includes("access_token"));
+});
+
+test("stream: legacy GET?fileid&access_token nadal gra (stare wersje PWA)", async () => {
+  installMock();
+  mockFetch = (url) => {
+    const u = new URL(url);
+    if (u.hostname === "eapi.pcloud.com")
+      return Promise.resolve(
+        new Response(JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: "/x.mp3" }), {
+          status: 200,
+        }),
+      );
+    return Promise.resolve(new Response("BYTES", { status: 200 }));
+  };
+  const res = await worker.fetch(req("/stream?fileid=7&access_token=tok"), ENV);
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "BYTES");
 });
 
 test("stream?fileid: retry po 410 (IP-binding) aż do 206", async () => {
@@ -236,7 +291,11 @@ test("stream?fileid: retry po 410 (IP-binding) aż do 206", async () => {
     );
   };
   const res = await worker.fetch(
-    req("/stream?fileid=7&access_token=tok", { headers: { Range: "bytes=0-65535" } }),
+    reqForm(
+      "/stream",
+      { fileid: "7", access_token: "tok" },
+      { headers: { Range: "bytes=0-65535" } },
+    ),
     ENV,
   );
   assert.equal(res.status, 206);
@@ -257,7 +316,7 @@ test("stream?fileid: trwałe 410 po wyczerpaniu retry → 502", async () => {
       );
     return Promise.resolve(new Response("other-ip", { status: 410 }));
   };
-  const res = await worker.fetch(req("/stream?fileid=7&access_token=tok"), ENV);
+  const res = await worker.fetch(reqForm("/stream", { fileid: "7", access_token: "tok" }), ENV);
   assert.equal(res.status, 502);
   assert.equal((await res.json()).error, "pcloud_link_unavailable");
 });
@@ -270,15 +329,35 @@ test("stream?fileid: błąd pCloud przepuszczany jako JSON z result", async () =
         status: 200,
       }),
     );
-  const res = await worker.fetch(req("/stream?fileid=7&access_token=bad"), ENV);
+  const res = await worker.fetch(reqForm("/stream", { fileid: "7", access_token: "bad" }), ENV);
   assert.equal(res.status, 200);
   assert.equal((await res.json()).result, 2094);
 });
 
 test("stream?fileid: bez tokena → 400", async () => {
+  // (GET pozostaje tylko dla wstecznej zgodności; nowe klienty używają POST)
   installMock();
-  const res = await worker.fetch(req("/stream?fileid=7"), ENV);
+  const res = await worker.fetch(reqForm("/stream", { fileid: "7" }), ENV);
   assert.equal(res.status, 400);
+});
+
+test("stream: POST bez form-urlencoded nie czyta tokena z query → 400", async () => {
+  installMock();
+  const request = new Request("https://rw-proxy.test/stream?access_token=tok&fileid=7", {
+    method: "POST",
+    headers: { Origin: ORIGIN, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const res = await worker.fetch(request, ENV);
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "unsupported_content_type");
+});
+
+test("health: POST → 405 (tylko GET)", async () => {
+  installMock();
+  const res = await worker.fetch(req("/health", { method: "POST" }), ENV);
+  assert.equal(res.status, 405);
+  assert.equal(res.headers.get("Access-Control-Allow-Origin"), ORIGIN);
 });
 
 // === POST /head (bilet 19): batch headów ID3, NDJSON streamowany ===
@@ -330,7 +409,7 @@ test("head: GET → 405, POST bez ciała/fileids → 400", async () => {
 test("head: happy path, 2 pliki, NDJSON ok + base64, Range bytes=0-8191", async () => {
   counts = { getfilelink: 0, download: 0 };
   installHeadMock({ bytes: "ID3DATA", counts });
-  const res = await worker.fetch(reqPost("/head?access_token=tok", { fileids: [1, 2] }), ENV);
+  const res = await worker.fetch(reqPost("/head", { fileids: [1, 2], access_token: "tok" }), ENV);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("Content-Type"), "application/x-ndjson; charset=utf-8");
   assert.equal(res.headers.get("Access-Control-Allow-Origin"), ORIGIN);
@@ -370,7 +449,7 @@ test("head: częściowy błąd — plik z trwałym IP-binding → linia error, b
       return Promise.resolve(new Response("other-ip", { status: 410 }));
     return Promise.resolve(new Response("OK", { status: 206 }));
   };
-  const res = await worker.fetch(reqPost("/head?access_token=tok", { fileids: [1, 2] }), ENV);
+  const res = await worker.fetch(reqPost("/head", { fileids: [1, 2], access_token: "tok" }), ENV);
   assert.equal(res.status, 200);
   const lines = (await res.text())
     .trim()
@@ -395,7 +474,10 @@ test("head: cap 21 fileids → 400; 20 fileids → 20 linii NDJSON", async () =>
   assert.equal(
     (
       await worker.fetch(
-        reqPost("/head?access_token=tok", { fileids: Array.from({ length: 21 }, (_, i) => i + 1) }),
+        reqPost("/head", {
+          fileids: Array.from({ length: 21 }, (_, i) => i + 1),
+          access_token: "tok",
+        }),
         ENV,
       )
     ).status,
@@ -403,7 +485,7 @@ test("head: cap 21 fileids → 400; 20 fileids → 20 linii NDJSON", async () =>
   );
 
   const res = await worker.fetch(
-    reqPost("/head?access_token=tok", { fileids: Array.from({ length: 20 }, (_, i) => i + 1) }),
+    reqPost("/head", { fileids: Array.from({ length: 20 }, (_, i) => i + 1), access_token: "tok" }),
     ENV,
   );
   assert.equal(res.status, 200);
@@ -431,7 +513,7 @@ test("head: twardy sufit 46 subrequestów → linie budget_exhausted zamiast pad
     return Promise.resolve(new Response("other-ip", { status: 410 }));
   };
   const res = await worker.fetch(
-    reqPost("/head?access_token=tok", { fileids: Array.from({ length: 20 }, (_, i) => i + 1) }),
+    reqPost("/head", { fileids: Array.from({ length: 20 }, (_, i) => i + 1), access_token: "tok" }),
     ENV,
   );
   assert.equal(res.status, 200);
@@ -443,10 +525,12 @@ test("head: twardy sufit 46 subrequestów → linie budget_exhausted zamiast pad
   assert.ok(lines.every((l) => l.status === "error" && l.code));
 });
 
-test("head: brak tokena → 400", async () => {
+test("head: brak tokena → 400; token w query już nie wystarcza", async () => {
   installMock();
-  const res = await worker.fetch(reqPost("/head", { fileids: [1] }), ENV);
-  assert.equal(res.status, 400);
+  assert.equal((await worker.fetch(reqPost("/head", { fileids: [1] }), ENV)).status, 400);
+  const queryToken = await worker.fetch(reqPost("/head?access_token=tok", { fileids: [1] }), ENV);
+  assert.equal(queryToken.status, 400);
+  assert.equal((await queryToken.json()).error, "missing_access_token");
 });
 
 test("hashToken stabilny i ukrywa token", async () => {

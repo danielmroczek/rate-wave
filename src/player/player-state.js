@@ -119,8 +119,8 @@ export function createPlayer({
 
   /**
    * Wybiera Utwór i natychmiast odtwarza (Pełny powrót: `startAt` = sekunda
-   * pozycji). Link z getfilelink idzie prosto do <audio src> — media element
-   * czyta z pCloud bez proxy bajtów i bez nagłówka Origin (no-referrer w HTML).
+   * pozycji). `getLink` dostarcza URL do <audio src> — domyślnie Blob URL
+   * z bajtów pobranych przez READ-PROXY POST-em (#18).
    * @param {any} t
    * @param {{ startAt?: number, autoplay?: boolean }} [opts]
    */

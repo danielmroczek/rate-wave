@@ -4,6 +4,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   getTrackLink,
   fetchTrackStream,
+  fetchTrackBlob,
   fetchTrackBytes,
   isLinkExpired,
   ProxyError,
@@ -12,7 +13,7 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("getTrackLink", () => {
-  it("buduje wers proxy z tokenem w query i zwraca link + expires", async () => {
+  it("POSTuje token w body (nie w URL) i zwraca link + expires", async () => {
     const mock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -31,11 +32,15 @@ describe("getTrackLink", () => {
       fileid: 42,
       hostname: "eapi.pcloud.com",
     });
-    const url = new URL(mock.mock.calls[0][0]);
+    const [rawUrl, init] = mock.mock.calls[0];
+    const url = new URL(rawUrl);
     expect(url.pathname).toBe("/getfilelink");
-    expect(url.searchParams.get("access_token")).toBe("tok");
-    expect(url.searchParams.get("fileid")).toBe("42");
-    expect(url.searchParams.get("hostname")).toBe("eapi.pcloud.com");
+    expect(url.searchParams.get("access_token")).toBeNull();
+    expect(init.method).toBe("POST");
+    const body = /** @type {URLSearchParams} */ (init.body);
+    expect(body.get("access_token")).toBe("tok");
+    expect(body.get("fileid")).toBe("42");
+    expect(body.get("hostname")).toBe("eapi.pcloud.com");
     expect(link).toBe("https://file-u3.pcloud.com/x.mp3");
     expect(expires).toBe(1234);
   });
@@ -106,7 +111,7 @@ describe("fetchTrackBytes", () => {
 });
 
 describe("fetchTrackStream", () => {
-  it("woła /stream z fileid+tokenem i przekazuje Range", async () => {
+  it("POSTuje /stream z fileid+tokenem w body i przekazuje Range", async () => {
     const mock = vi
       .fn()
       .mockResolvedValue(
@@ -115,12 +120,28 @@ describe("fetchTrackStream", () => {
     vi.stubGlobal("fetch", mock);
 
     const res = await fetchTrackStream({ token: "tok", fileid: 9, range: "bytes=0-65535" });
-    const url = new URL(mock.mock.calls[0][0]);
+    const [rawUrl, init] = mock.mock.calls[0];
+    const url = new URL(rawUrl);
     expect(url.pathname).toBe("/stream");
-    expect(url.searchParams.get("fileid")).toBe("9");
-    expect(url.searchParams.get("access_token")).toBe("tok");
-    expect(mock.mock.calls[0][1].headers.Range).toBe("bytes=0-65535");
+    expect(url.searchParams.get("access_token")).toBeNull();
+    expect(init.method).toBe("POST");
+    const body = /** @type {URLSearchParams} */ (init.body);
+    expect(body.get("access_token")).toBe("tok");
+    expect(body.get("fileid")).toBe("9");
+    expect(init.headers.Range).toBe("bytes=0-65535");
     expect(res.status).toBe(206);
+  });
+
+  it("fetchTrackBlob zwraca cały Utwór z POST /stream", async () => {
+    const mock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(new Blob(["AUDIO_BYTES"], { type: "audio/mpeg" }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", mock);
+    const blob = await fetchTrackBlob({ token: "tok", fileid: 9 });
+    expect(await blob.text()).toBe("AUDIO_BYTES");
+    expect(mock.mock.calls[0][1].method).toBe("POST");
   });
 
   it("200 z JSON pCloud (błąd getfilelink w /stream) → błąd zamiast bajtów JSON", async () => {
