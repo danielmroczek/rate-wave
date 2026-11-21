@@ -44,6 +44,10 @@ _Avoid_: login, konfiguracja
 Po ponownym wejściu aplikacja przywraca wszystko: Źródła, bibliotekę z cache, ostatni Utwór i pozycję. Gdy ostatni Utwór zniknął — degradacja: zaznaczenie listy, potem brak zaznaczenia.
 _Avoid_: resume, restore
 
+**Negocjacja metody (Method negotiation)**:
+Jednorazowe rozpoznanie przy starcie aplikacji, którą metodą z ciałem klient mówi do Proxy odczytu: `QUERY` (bezpieczna, idempotentna) czy `POST` (fallback). Sonda `QUERY /health`, wynik w pamięci sesji, a każde żądanie potrafi zejść na `POST`, gdy `QUERY` zostanie odrzucone.
+_Avoid_: feature detection, wykrywanie przeglądarki
+
 **Wylogowanie (Sign out)**:
 Jawna akcja użytkownika: unieważnienie tokena OAuth po stronie pCloud (`deletetoken`, best-effort) i usunięcie lokalnej kopii tokena oraz rekordu źródła (wraz z wyborem folderu, bo należy do konta). Różne od „Wyczyść wszystkie dane”, które usuwa całą bazę i localStorage.
 _Avoid_: logout, reset konta

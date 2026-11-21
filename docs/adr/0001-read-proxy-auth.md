@@ -36,12 +36,12 @@ with the caller's identity. This exposes the token in the worker's own URL
 
 ## Konsekwencje
 
-- Worker contract (po #18): `POST /getfilelink` (form body) returns the pCloud
-  JSON with the file link, `POST /stream` (form body) streams bytes with
-  per-origin `Access-Control-Allow-Origin` (fetch-reads: tags, waveform,
-  ReplayGain, rating rewrite, playback Blob), `GET /stream?url=…` streams a
-  known link, and legacy `GET /stream?fileid=…&access_token=…` remains only for
-  pre-#18 PWA clients.
+- Worker contract (po #18/#20): `QUERY` lub `POST /getfilelink` (form body)
+  returns the pCloud JSON with the file link, `QUERY`/`POST /stream` (form body)
+  streams bytes with per-origin `Access-Control-Allow-Origin` (fetch-reads: tags,
+  waveform, ReplayGain, rating rewrite, playback Blob), `GET /stream?url=…`
+  streams a known link, and legacy `GET /stream?fileid=…&access_token=…` remains
+  only for pre-#18 PWA clients.
 - Rate limiting (`≤12 outstanding getfilelink`; podniesione z 10 przy #19 —
   /head używa 12 równoległych fetchy, pomiar: brak 429 do 30 równoległych)
   is enforced in-memory per
@@ -80,6 +80,37 @@ docelowy:
 dla starych wersji PWA w cache'ach przeglądarek. Nowe klienty go nie używają;
 usunąć po przejściu cache rollover. Token nigdy nie trafia na URL-e hostów
 plików pCloud i nie jest logowany.
+
+## Aktualizacja 2026-11-21 (#20): negocjacja QUERY → POST
+
+`QUERY` (draft-ietf-httpbis-safe-method-w-body) jest **bezpieczną,
+idempotentną** metodą, która — inaczej niż `GET` — przyjmuje ciało żądania.
+Daje więc to, czego brakowało `POST`-owi: semantykę odczytu z tokenem w body.
+
+- Worker obsługuje `QUERY` na `/getfilelink`, `/stream` i `/head` (parametry
+  parsowane identycznie jak dla `POST`) oraz `QUERY /health` jako sondę;
+  `QUERY` jest dopisane do `Access-Control-Allow-Methods` (preflight jest
+  konieczny — metoda nie jest CORS-safelisted).
+- Klient negocjuje metodę **raz, przy starcie i bez blokowania bootu**:
+  `detectProxyMethod()` woła `QUERY /health` równolegle z resztą startu.
+  `200` → `QUERY` (wynik ostateczny), `405`/`501` → `POST` (wynik ostateczny),
+  a **każda inna porażka** (błąd sieci, `403`/`429`/`5xx`, WAF, deploy w toku)
+  daje `POST` tylko tymczasowo — kolejna sonda może jeszcze wybrać `QUERY`.
+  Wynik żyje w pamięci sesji (nie w IDB — proxy/pośrednik mogą się zmienić).
+  Do czasu rozstrzygnięcia klient używa `POST`, a od tego momentu każde
+  żądanie czyta wynegocjowaną metodę.
+- Każde żądanie ma lokalny fallback: `QUERY` z `405`/`501` → ponowienie tym
+  samym body jako `POST` i **trwałe** zejście na `POST` (`demoteProxyMethod`).
+  Błąd sieci → ponowienie `POST`-em **tylko dla tego żądania**, bez skreślania
+  `QUERY` na całą sesję. Sonda nie musi być doskonała — awaria nie blokuje
+  odczytu i nie psuje negocjacji na stałe.
+- Odtwarzanie bez zmian: bajty idą żądaniem z ciałem, `<audio>` gra z Blob
+  URL-a; element mediowy nie obsługuje ani `POST`, ani `QUERY`.
+
+Uwaga wdrożeniowa: do czasu deployu nowego workera sonda zwraca `POST`
+(stary worker odpowiada `405` na `QUERY`, czyli wynik ostateczny) — aplikacja
+działa poprawnie, tylko bez korzyści z `QUERY`. Po deployu wystarczy przeładowanie
+strony, żeby ponowna sonda wybrała `QUERY`.
 
 Dodatkowe twardnienie z biletu #18:
 
