@@ -11,6 +11,7 @@ import {
   signOut,
 } from "./auth/auth-flow.js";
 import { loadTokenFromDB } from "./auth/token-store.js";
+import { detectProxyMethod } from "./api/proxy-capability.js";
 import { mountLibraryView, unmountLibraryView } from "./library/library-view.js";
 import { mountPlayer } from "./player/player-view.js";
 /** Pokazuje/ukrywa ekrany na podstawie stanu autoryzacji. */
@@ -35,6 +36,13 @@ function renderAuthState(state) {
 }
 
 async function boot() {
+  // 0. Rozpoznanie metody READ-PROXY (QUERY vs POST) — równolegle z resztą
+  // startu i bez blokowania bootu: do czasu wyniku klient używa POST, a od
+  // momentu rozstrzygnięcia każde żądanie czyta już wynegocjowaną metodę.
+  void detectProxyMethod().then((method) => {
+    console.log("[boot] READ-PROXY method:", method);
+  });
+
   // 1. Baza — otwieramy raz i trzymamy na całą sesję (LWW, multi-tab bez locków).
   let db;
   /** @type {ReturnType<typeof mountPlayer> | null} */

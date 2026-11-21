@@ -1,12 +1,50 @@
 // Klient READ-PROXY (bilet 05, spec §8: api/worker-proxy.js).
-// Wszystkie odczyty bajtów i /getfilelink wysyłają token w body POST (#18).
-// Playback nie wystawia tokena w URL-u: `fetchTrackBlob` pobiera bajty POST-em,
+// Wszystkie odczyty bajtów i /getfilelink wysyłają token w body (#18).
+// Metoda jest negocjowana (#20): QUERY, gdy proxy je obsługuje, inaczej POST.
+// Playback nie wystawia tokena w URL-u: `fetchTrackBlob` pobiera bajty z ciałem,
 // a `<audio>` gra z Blob URL-a.
 
+import { PROXY_BASE_URL } from "./proxy-config.js";
+import {
+  FALLBACK_METHOD,
+  PREFERRED_METHOD,
+  currentProxyMethod,
+  demoteProxyMethod,
+  isUnsupportedMethod,
+} from "./proxy-capability.js";
+
 /**
- * Baza URL READ-PROXY (współdzielona przez worker-proxy + proxy-batch).
+ * Żądanie do proxy z ciałem: preferowana metoda z negocjacji, a przy
+ * 405/501/błędzie sieci — jednorazowy fallback na POST z tym samym body.
+ * @param {string} path
+ * @param {{ body: URLSearchParams|string, headers?: HeadersInit, signal?: AbortSignal }} opts
+ * @returns {Promise<Response>}
  */
-export const PROXY_BASE_URL = import.meta.env?.VITE_RW_PROXY_URL || "http://localhost:8787";
+export async function proxyFetchWithBody(path, { body, headers, signal }) {
+  const send = (method) =>
+    fetch(
+      `${PROXY_BASE_URL}${path}`,
+      /** @type {RequestInit} */ ({ method, body, headers, signal }),
+    );
+
+  if (currentProxyMethod() === FALLBACK_METHOD) return send(FALLBACK_METHOD);
+
+  let res;
+  try {
+    res = await send(PREFERRED_METHOD);
+  } catch (err) {
+    if (/** @type {any} */ (err)?.name === "AbortError") throw err;
+    // Awaria przejściowa: ten request ratujemy POST-em, ale nie skreślamy
+    // QUERY na całą sesję (kolejny request znów spróbuje QUERY).
+    return send(FALLBACK_METHOD);
+  }
+  if (isUnsupportedMethod(res)) {
+    await res.body?.cancel().catch(() => {}); // zwolnij połączenie przed retry
+    demoteProxyMethod(`http ${res.status}`);
+    return send(FALLBACK_METHOD);
+  }
+  return res;
+}
 
 export class ProxyError extends Error {
   constructor(code, status) {
@@ -18,7 +56,7 @@ export class ProxyError extends Error {
 }
 
 /**
- * Form-urlencoded body dla POST-ów proxy (#18) — token nie trafia do URL-a.
+ * Form-urlencoded body żądań proxy (#18) — token nie trafia do URL-a.
  * @param {Record<string, string|number|undefined|null>} fields
  * @returns {URLSearchParams}
  */
@@ -37,8 +75,7 @@ function formBody(fields) {
  */
 export async function getTrackLink({ token, fileid, path, hostname, contenttype }) {
   if (!fileid && !path) throw new Error("getTrackLink: fileid or path required");
-  const res = await fetch(`${PROXY_BASE_URL}/getfilelink`, {
-    method: "POST",
+  const res = await proxyFetchWithBody("/getfilelink", {
     body: formBody({ access_token: token, fileid, path, hostname, contenttype }),
   });
   if (res.status === 429) throw new ProxyError("too_many_getfilelink", 429);
@@ -61,14 +98,14 @@ export async function getTrackLink({ token, fileid, path, hostname, contenttype 
  * losuje się per połączenie — /stream sam generuje link i pobiera bajty
  * w jednym wywołaniu: retry (8 × getfilelink + wszystkie hosty z hosts[]).
  * Skuteczność (zmierzone na produkcji, 27 prób): ~85%; brak rozwiązania na 100%.
- * Token idzie w form-urlencoded body POST (#18); `Range` — jak dotąd — nagłówkiem.
+ * Token idzie w form-urlencoded body (#18), metodą z negocjacji QUERY/POST (#20);
+ * `Range` — jak dotąd — nagłówkiem.
  * @param {{ token: string, fileid?: string|number, path?: string, hostname?: string, range?: string, contenttype?: string }} opts
  * @returns {Promise<Response>} 200/206 z bajtami (do odczytu przez JS)
  */
 export async function fetchTrackStream({ token, fileid, path, hostname, range, contenttype }) {
   if (!fileid && !path) throw new Error("fetchTrackStream: fileid or path required");
-  const res = await fetch(`${PROXY_BASE_URL}/stream`, {
-    method: "POST",
+  const res = await proxyFetchWithBody("/stream", {
     body: formBody({ access_token: token, fileid, path, hostname, contenttype }),
     headers: range ? { Range: range } : undefined,
   });
@@ -86,9 +123,9 @@ export async function fetchTrackStream({ token, fileid, path, hostname, range, c
 }
 
 /**
- * Pobiera cały Utwór przez POST /stream i zwraca Blob do `URL.createObjectURL`.
- * Odtwarzanie z Blob-a trzyma token poza URL-em (`<audio src>` nie potrafi
- * wysłać POST-a, więc zamiast URL-a proxy dostaje obiekt w pamięci, #18).
+ * Pobiera cały Utwór przez /stream (QUERY/POST) i zwraca Blob do
+ * `URL.createObjectURL`. Odtwarzanie z Blob-a trzyma token poza URL-em
+ * (`<audio src>` nie potrafi wysłać żądania z ciałem, #18).
  * Pliki w bibliotece są małe (średnio ~1,6 MB), więc pełne pobranie jest
  * akceptowalne; Blob umożliwia też od razu seek po całym materiale.
  * @param {{ token: string, fileid?: string|number, path?: string, hostname?: string, contenttype?: string }} opts

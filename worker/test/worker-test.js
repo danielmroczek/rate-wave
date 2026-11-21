@@ -353,11 +353,92 @@ test("stream: POST bez form-urlencoded nie czyta tokena z query → 400", async 
   assert.equal((await res.json()).error, "unsupported_content_type");
 });
 
-test("health: POST → 405 (tylko GET)", async () => {
+test("health: POST → 405 (tylko GET/QUERY)", async () => {
   installMock();
   const res = await worker.fetch(req("/health", { method: "POST" }), ENV);
   assert.equal(res.status, 405);
   assert.equal(res.headers.get("Access-Control-Allow-Origin"), ORIGIN);
+});
+
+test("health: QUERY → 200 (sonda zdolności #20)", async () => {
+  installMock();
+  const res = await worker.fetch(req("/health", { method: "QUERY" }), ENV);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+});
+
+test("preflight: QUERY na liście dozwolonych metod CORS", async () => {
+  const res = await worker.fetch(req("/stream", { method: "OPTIONS" }), ENV);
+  assert.match(res.headers.get("Access-Control-Allow-Methods"), /QUERY/);
+});
+
+test("QUERY /getfilelink: token z form body, jak POST", async () => {
+  installMock();
+  mockFetch = (url) => {
+    const u = new URL(url);
+    assert.equal(u.searchParams.get("access_token"), "tok");
+    assert.equal(u.searchParams.get("fileid"), "5");
+    return Promise.resolve(new Response(JSON.stringify({ result: 0 }), { status: 200 }));
+  };
+  const request = new Request("https://rw-proxy.test/getfilelink", {
+    method: "QUERY",
+    headers: { Origin: ORIGIN },
+    body: new URLSearchParams({ access_token: "tok", fileid: "5" }),
+  });
+  const res = await worker.fetch(request, ENV);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).result, 0);
+});
+
+test("QUERY /stream: pobiera bajty (getfilelink + download w jednym)", async () => {
+  installMock();
+  mockFetch = (url) => {
+    const u = new URL(url);
+    if (u.hostname === "eapi.pcloud.com")
+      return Promise.resolve(
+        new Response(JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: "/x.mp3" }), {
+          status: 200,
+        }),
+      );
+    return Promise.resolve(new Response("BYTES", { status: 200 }));
+  };
+  const request = new Request("https://rw-proxy.test/stream", {
+    method: "QUERY",
+    headers: { Origin: ORIGIN },
+    body: new URLSearchParams({ access_token: "tok", fileid: "7" }),
+  });
+  const res = await worker.fetch(request, ENV);
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "BYTES");
+});
+
+test("QUERY /head: token z JSON body, NDJSON", async () => {
+  installMock();
+  mockFetch = (url) => {
+    const u = new URL(url);
+    if (u.hostname === "eapi.pcloud.com")
+      return Promise.resolve(
+        new Response(JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: "/x.mp3" }), {
+          status: 200,
+        }),
+      );
+    return Promise.resolve(new Response("HEAD", { status: 206 }));
+  };
+  const request = new Request("https://rw-proxy.test/head", {
+    method: "QUERY",
+    headers: { Origin: ORIGIN, "Content-Type": "application/json" },
+    body: JSON.stringify({ fileids: [1], access_token: "tok" }),
+  });
+  const res = await worker.fetch(request, ENV);
+  assert.equal(res.status, 200);
+  const lines = (await res.text())
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    lines.map((l) => [l.fileid, l.status]),
+    [[1, "ok"]],
+  );
 });
 
 // === POST /head (bilet 19): batch headów ID3, NDJSON streamowany ===

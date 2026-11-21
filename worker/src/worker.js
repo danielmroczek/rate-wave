@@ -1,9 +1,14 @@
-// rate-wave READ-PROXY (bilet 05, ADR 0001, bilet #18): passthrough getfilelink
-// + bajty z ACAO. Worker bezstanowy — token użytkownika przychodzi w body POST
-// (form-urlencoded; JSON dla /head). GET z tokenem w query zostaje tylko jako
-// legacy dla starych wersji PWA na /stream. Token nigdy nie jest logowany ani
-// przekazywany poza pCloud. Logujemy metodę, ścieżkę i wynik — NIGDY
-// query-stringa ani body.
+// rate-wave READ-PROXY (bilet 05, ADR 0001, bilety #18/#20): passthrough
+// getfilelink + bajty z ACAO. Worker bezstanowy — token użytkownika przychodzi
+// w body: `POST` albo `QUERY` (form-urlencoded; JSON dla /head). `QUERY` jest
+// bezpieczną metodą z ciałem (draft-ietf-httpbis-safe-method-w-body), więc
+// klient preferuje ją, gdy worker ją obsługuje, a `POST` zostaje fallbackiem.
+// GET z tokenem w query zostaje tylko jako legacy dla starych wersji PWA na
+// /stream. Token nigdy nie jest logowany ani przekazywany poza pCloud. Logujemy
+// metodę, ścieżkę i wynik — NIGDY query-stringa ani body.
+
+// Metody z ciałem żądania (QUERY = bezpieczna, idempotentna alternatywa POST).
+const BODY_METHODS = new Set(["POST", "QUERY"]);
 
 const API_HOSTS = new Set(["eapi.pcloud.com", "api.pcloud.com"]);
 const PCLOUD_HOST_RE = /\.pcloud\.com$/;
@@ -18,23 +23,25 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") return preflight(request, env);
-    if (url.pathname === "/head" && request.method === "POST") return handleHead(request, env);
+    if (url.pathname === "/head" && BODY_METHODS.has(request.method))
+      return handleHead(request, env);
     if (url.pathname === "/head")
       return jsonError(405, "method_not_allowed", corsHeaders(request, env));
 
-    // #18: token w body POST. GET zostaje tylko na /stream (wsteczna zgodność
-    // dla `<audio src>` w starych wersjach PWA); nowe klienty czytają bajty POST-em.
-    if (request.method !== "GET" && request.method !== "POST")
+    // Token w body: POST lub QUERY. GET zostaje tylko na /stream (wsteczna
+    // zgodność dla `<audio src>` w starych wersjach PWA).
+    if (request.method !== "GET" && !BODY_METHODS.has(request.method))
       return jsonError(405, "method_not_allowed", corsHeaders(request, env));
 
     if (url.pathname === "/getfilelink") {
-      if (request.method !== "POST")
+      if (!BODY_METHODS.has(request.method))
         return jsonError(405, "method_not_allowed", corsHeaders(request, env));
       return handleGetFileLink(request, env, url);
     }
     if (url.pathname === "/stream") return handleStream(request, env, url);
     if (url.pathname === "/health") {
-      if (request.method !== "GET")
+      // QUERY /health = sonda zdolności (klient rozpoznaje obsługę metody).
+      if (request.method !== "GET" && request.method !== "QUERY")
         return jsonError(405, "method_not_allowed", corsHeaders(request, env));
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -154,11 +161,12 @@ async function headBytes(token, fileid, budget) {
 }
 
 // Parametry żądania: query wyłącznie dla GET (`/stream?url=` i wsteczna
-// zgodność `<audio src>`), form-urlencoded body dla POST (#18). JSON ma osobną
-// ścieżkę (/head). POST bez form-urlencoded jest odrzucany — żeby token nie
-// mógł wrócić do query stringa. Nie logujemy ani nie odbijamy treści body.
+// zgodność `<audio src>`), form-urlencoded body dla POST/QUERY (#18/#20). JSON
+// ma osobną ścieżkę (/head). Żądanie z ciałem bez form-urlencoded jest
+// odrzucane — żeby token nie mógł wrócić do query stringa. Nie logujemy ani
+// nie odbijamy treści body.
 async function requestParams(request, url) {
-  if (request.method === "GET") return { params: url.searchParams, errorCode: null };
+  if (!BODY_METHODS.has(request.method)) return { params: url.searchParams, errorCode: null };
   const contentType = request.headers.get("Content-Type") ?? "";
   if (!contentType.includes("application/x-www-form-urlencoded")) {
     return { params: null, errorCode: "unsupported_content_type" };
@@ -393,7 +401,7 @@ function preflight(request, env) {
     status: 204,
     headers: {
       ...corsHeaders(request, env),
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, QUERY, OPTIONS",
       "Access-Control-Allow-Headers": "Range, Content-Type",
       "Access-Control-Max-Age": "86400",
     },

@@ -7,10 +7,12 @@ import {
   fetchHeadBatchWithRetry,
   decodeBase64,
 } from "./proxy-batch.js";
+import { detectProxyMethod, resetProxyMethod } from "./proxy-capability.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
+  resetProxyMethod();
 });
 
 /** Response z NDJSON body stream */
@@ -66,6 +68,20 @@ describe("fetchHeadBatch", () => {
       );
     const r = await fetchHeadBatch({ token: "t", fileids: [9] });
     expect(r.get(9)).toEqual({ status: "ok", bytes: new Uint8Array(1) });
+  });
+
+  it("po negocjacji wysyła /head metodą QUERY", async () => {
+    globalThis.fetch = async () => new Response("", { status: 200 });
+    await detectProxyMethod();
+
+    /** @type {any} */
+    let captured;
+    globalThis.fetch = async (_url, init) => {
+      captured = init;
+      return ndjsonResponse(['{"fileid":1,"status":"ok","bytesBase64":"AA=="}']);
+    };
+    await fetchHeadBatch({ token: "t", fileids: [1] });
+    expect(captured.method).toBe("QUERY");
   });
 
   it("HTTP 500 → rzuca ProxyError", async () => {

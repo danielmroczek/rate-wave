@@ -2,7 +2,7 @@
 // Body: { fileids: [...] } (cap 20); odpowiedź: linia NDJSON per plik, wysyłana
 // natychmiast. Retry błędów: 3 próby backoff (1 s / 5 s / 20 s).
 
-import { ProxyError, PROXY_BASE_URL } from "./worker-proxy.js";
+import { ProxyError, proxyFetchWithBody } from "./worker-proxy.js";
 
 /** Limit batcha /head (worker cap 20; ≤50 subrequestów/request free tier). */
 export const HEAD_BATCH_CAP = 20;
@@ -47,9 +47,8 @@ export async function fetchHeadBatch({ token, fileids, signal, onLine }) {
   if (!fileids.length || fileids.length > HEAD_BATCH_CAP) {
     throw new Error(`fetchHeadBatch: 1..${HEAD_BATCH_CAP} fileids required`);
   }
-  // #18: token w body, nie w query.
-  const res = await fetch(`${PROXY_BASE_URL}/head`, {
-    method: "POST",
+  // #18: token w body, nie w query. #20: QUERY, gdy proxy je obsługuje.
+  const res = await proxyFetchWithBody("/head", {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ fileids, access_token: token }),
     signal,

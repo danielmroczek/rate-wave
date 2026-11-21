@@ -9,8 +9,20 @@ import {
   isLinkExpired,
   ProxyError,
 } from "./worker-proxy.js";
+import { detectProxyMethod, currentProxyMethod, resetProxyMethod } from "./proxy-capability.js";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  resetProxyMethod();
+  vi.unstubAllGlobals();
+});
+
+/** Ustawia negocjację na QUERY (sonda /health → 200). */
+async function negotiateQuery() {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 200 })));
+  await detectProxyMethod();
+  vi.unstubAllGlobals();
+  expect(currentProxyMethod()).toBe("QUERY");
+}
 
 describe("getTrackLink", () => {
   it("POSTuje token w body (nie w URL) i zwraca link + expires", async () => {
@@ -176,6 +188,75 @@ describe("fetchTrackStream", () => {
 
   it("wymaga fileid albo path", async () => {
     await expect(fetchTrackStream({ token: "t" })).rejects.toThrow(/fileid or path/);
+  });
+});
+
+describe("negocjacja metody QUERY → POST (#20)", () => {
+  it("po sondzie QUERY wysyła getfilelink metodą QUERY", async () => {
+    await negotiateQuery();
+    const mock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ result: 0, hosts: ["file-u3.pcloud.com"], path: "/x.mp3", expires: 1 }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", mock);
+
+    await getTrackLink({ token: "tok", fileid: 7 });
+    expect(mock.mock.calls[0][1].method).toBe("QUERY");
+  });
+
+  it("QUERY odrzucone 405 → ponawia POST-em i zapamiętuje fallback", async () => {
+    await negotiateQuery();
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 405 }))
+      .mockResolvedValueOnce(
+        new Response("BYTES", { status: 206, headers: { "Content-Range": "bytes 0-4/10" } }),
+      );
+    vi.stubGlobal("fetch", mock);
+
+    const res = await fetchTrackStream({ token: "tok", fileid: 9 });
+    expect(res.status).toBe(206);
+    expect(mock.mock.calls.map((c) => c[1].method)).toEqual(["QUERY", "POST"]);
+    expect(currentProxyMethod()).toBe("POST");
+
+    mock.mockClear();
+    mock.mockResolvedValue(new Response("BYTES", { status: 200 }));
+    await fetchTrackStream({ token: "tok", fileid: 9 });
+    expect(mock.mock.calls[0][1].method).toBe("POST");
+  });
+
+  it("błąd sieci przy QUERY → POST tylko dla tego żądania, QUERY zostaje", async () => {
+    await negotiateQuery();
+    const mock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("connection reset"))
+      .mockResolvedValue(new Response("BYTES", { status: 200 }));
+    vi.stubGlobal("fetch", mock);
+
+    const res = await fetchTrackStream({ token: "tok", fileid: 9 });
+    expect(res.status).toBe(200);
+    expect(mock.mock.calls.map((c) => c[1].method)).toEqual(["QUERY", "POST"]);
+    expect(currentProxyMethod()).toBe("QUERY");
+
+    // następne żądanie znów próbuje QUERY
+    await fetchTrackStream({ token: "tok", fileid: 10 });
+    expect(mock.mock.calls.at(-1)[1].method).toBe("QUERY");
+  });
+
+  it("403/500 przy QUERY nie degradują sesji (to nie brak metody)", async () => {
+    await negotiateQuery();
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "x" }), { status: 502 }))
+      .mockResolvedValue(new Response(JSON.stringify({ error: "x" }), { status: 200 }));
+    vi.stubGlobal("fetch", mock);
+
+    await fetchTrackStream({ token: "tok", fileid: 9 }).catch(() => {});
+    expect(currentProxyMethod()).toBe("QUERY");
   });
 });
 
