@@ -136,6 +136,31 @@ export function getAllKeys(db, storeName) {
 }
 
 /**
+ * Wszystkie pary klucz/wartość ze store'a (kolejność kluczy IDB).
+ * @template T
+ * @param {IDBDatabase} db
+ * @param {string} storeName
+ * @returns {Promise<Array<{key: IDBValidKey, value: T}>>}
+ */
+export function getAllEntries(db, storeName) {
+  return new Promise((resolve, reject) => {
+    /** @type {Array<{key: IDBValidKey, value: T}>} */
+    const entries = [];
+    const req = db.transaction(storeName, "readonly").objectStore(storeName).openCursor();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) {
+        resolve(entries);
+        return;
+      }
+      entries.push({ key: cursor.key, value: /** @type {T} */ (cursor.value) });
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error ?? new Error("getAllEntries failed"));
+  });
+}
+
+/**
  * Zapisuje kilka par w JEDNEJ transakcji (atomowo).
  * @param {IDBDatabase} db
  * @param {Array<{store: string, key: IDBValidKey, value: any}>} entries

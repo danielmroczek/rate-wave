@@ -1,10 +1,12 @@
-// Kontroler zapisu oceny (bilet #8): optimistic UI, serializowany upload,
-// aktualizacja cache `tracks` (Fingerprint) + wycofanie przy błędzie.
+// Kontroler zapisu oceny (bilety #8/#9): optimistic UI, serializowany upload,
+// aktualizacja cache `tracks`, kolejka `pending-ratings` przy awarii sieci
+// i flush wg createdAt + read-check Fingerprintu.
 // @vitest-environment node
 import { describe, it, expect, beforeEach } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { openDB, get, put, STORES } from "../store/db.js";
 import { createRatingController } from "./rating-controller.js";
+import { listPendingRatings } from "./pending-ratings.js";
 
 const WMP_OWNER = "Windows Media Player 9 Series";
 const SOURCE = "pcloud";
@@ -315,7 +317,7 @@ describe("serializacja uploadów", () => {
 });
 
 describe("awaria — UI nie kłamie", () => {
-  it("błąd fetchu wycofuje optimistic do potwierdzonej oceny i nie rusza cache", async () => {
+  it("trwały błąd (zły fileid) wycofuje optimistic do potwierdzonej oceny i nie rusza cache", async () => {
     const track = makeTrack();
     await put(db, STORES.TRACKS, track.key, {
       fingerprint: track.fingerprint,
@@ -324,9 +326,12 @@ describe("awaria — UI nie kłamie", () => {
     });
     const { controller, ratings, changes } = makeController({
       track,
-      fetchBytes: async () => {
-        throw new Error("pcloud_link_unavailable");
-      },
+      upload: async ({ bytes }) => ({
+        fileid: 999,
+        name: track.name,
+        size: bytes.length,
+        modified: 20,
+      }),
     });
     controller.rate(track, 5);
     expect(ratings.get(track.key).rating).toBe(5);
@@ -405,5 +410,229 @@ describe("awaria — UI nie kłamie", () => {
     await controller.whenIdle();
     expect(ratings.get(track.key).rating).toBe(5);
     expect((await get(db, STORES.TRACKS, track.key)).rating).toBe(5);
+  });
+});
+
+describe("pending-ratings — ocena nie ginie przy słabym łączu (bilet #9)", () => {
+  const offline = () => Promise.reject(new TypeError("Failed to fetch"));
+
+  it("błąd sieci → rekord w pending-ratings, gwiazdki zostają z ⏳ (bez rollbacku)", async () => {
+    const track = makeTrack();
+    await put(db, STORES.TRACKS, track.key, {
+      fingerprint: track.fingerprint,
+      rating: 3,
+      tagsReadAt: 1,
+    });
+    const { controller, ratings, changes } = makeController({ track, fetchBytes: offline });
+    controller.rate(track, 5);
+    await controller.whenIdle();
+
+    expect(ratings.get(track.key).rating).toBe(5);
+    expect(changes.at(-1)).toMatchObject({ rating: 5, pending: true, queued: true });
+    const queued = await listPendingRatings(db);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      key: track.key,
+      fingerprint: track.fingerprint,
+      ratingByte: 255,
+      action: "set",
+      createdAt: 1234,
+    });
+    // Cache ocen w IDB też niesie stan kolejki (§7) + pole `pendingUpload` (§4a).
+    const cached = await get(db, STORES.TRACKS, track.key);
+    expect(cached).toMatchObject({ rating: 5, pendingUpload: true });
+  });
+
+  it("klasyfikacja awarii: sieć, HTTP 5xx i sesja → kolejka; HTTP 4xx → rollback", async () => {
+    const failure = (err) => async () => {
+      throw err;
+    };
+    const cases = [
+      { error: Object.assign(new Error("boom"), { isNetworkError: true }), queued: true },
+      { error: Object.assign(new Error("pCloud upload HTTP 503"), { status: 503 }), queued: true },
+      { error: Object.assign(new Error("pCloud upload HTTP 500"), { status: 500 }), queued: true },
+      { error: Object.assign(new Error("pCloud upload HTTP 401"), { status: 401 }), queued: true },
+      { error: Object.assign(new Error("pCloud upload HTTP 400"), { status: 400 }), queued: false },
+    ];
+    for (const { error, queued } of cases) {
+      globalThis.indexedDB = new IDBFactory();
+      db = await openDB();
+      const track = makeTrack();
+      const { controller } = makeController({ track, fetchBytes: failure(error) });
+      controller.rate(track, 4);
+      await controller.whenIdle();
+      const records = await listPendingRatings(db);
+      expect({ message: error.message, queued: records.length === 1 }).toEqual({
+        message: error.message,
+        queued,
+      });
+    }
+  });
+
+  it("kolejne kliknięcia tego samego Utworu → jeden rekord, ostatni wygrywa (LWW)", async () => {
+    const track = makeTrack();
+    let clock = 100;
+    const { controller } = makeController({
+      track,
+      fetchBytes: offline,
+      now: () => ++clock,
+    });
+    controller.rate(track, 1);
+    await controller.whenIdle();
+    controller.rate(track, 4);
+    await controller.whenIdle();
+
+    const queued = await listPendingRatings(db);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ ratingByte: 196, action: "set", createdAt: 102 });
+  });
+
+  it("usunięcie oceny offline → action: remove, ratingByte 0", async () => {
+    const track = makeTrack();
+    const { controller, ratings } = makeController({ track, fetchBytes: offline });
+    controller.rate(track, null);
+    await controller.whenIdle();
+    expect(ratings.get(track.key).rating).toBe(null);
+    const queued = await listPendingRatings(db);
+    expect(queued[0]).toMatchObject({ action: "remove", ratingByte: 0 });
+  });
+});
+
+describe("flush pending-ratings (bilet #9)", () => {
+  /** Kontroler z dwoma Utworami i przełączaną siecią. */
+  function makeMulti({ stat } = {}) {
+    const SIZE = mp3WithRating(3).byteLength;
+    const t1 = makeTrack({ size: SIZE, fingerprint: { size: SIZE, modified: 10 } });
+    const t2 = makeTrack({
+      key: "pcloud|8",
+      fileid: 8,
+      name: "b.mp3",
+      size: SIZE,
+      fingerprint: { size: SIZE, modified: 10 },
+    });
+    const uploads = [];
+    const changes = [];
+    /** @type {Set<string>} */
+    const up = new Set();
+    let clock = 100;
+    const controller = createRatingController({
+      db,
+      token: "tok",
+      hostname: "eapi.pcloud.com",
+      tracks: [t1, t2],
+      ratings: new Map([
+        [t1.key, { fingerprint: t1.fingerprint, rating: 3, ratingSource: "WMP", tagsReadAt: 1 }],
+        [t2.key, { fingerprint: t2.fingerprint, rating: 1, ratingSource: "WMP", tagsReadAt: 1 }],
+      ]),
+      onChange: (key, state) => changes.push({ key, ...state }),
+      fetchBytes: async () => {
+        if (!up.has("net") && !up.has("ready")) throw new TypeError("Failed to fetch");
+        return mp3WithRating(3);
+      },
+      statFile: async (o) => stat?.(o) ?? { parentfolderid: "100" },
+      upload: async ({ filename, bytes }) => {
+        uploads.push({ filename, byte: wmpByte(bytes) });
+        return {
+          fileid: filename === "a.mp3" ? 7 : 8,
+          name: filename,
+          size: bytes.length,
+          modified: 20,
+        };
+      },
+      now: () => clock++,
+    });
+    return {
+      controller,
+      t1,
+      t2,
+      uploads,
+      changes,
+      goOnline() {
+        up.add("ready");
+      },
+    };
+  }
+
+  it("flush wysyła rekordy wg createdAt, po sukcesie czyści kolejkę i cache jest spójny", async () => {
+    const h = makeMulti();
+    h.controller.rate(h.t1, 5); // createdAt 100 — offline
+    h.controller.rate(h.t2, 4); // createdAt 101 — offline
+    await h.controller.whenIdle();
+    expect(await listPendingRatings(db)).toHaveLength(2);
+
+    h.goOnline();
+    const summary = await h.controller.flush();
+
+    expect(summary).toMatchObject({ flushed: 2, failed: 0, aborted: 0, skipped: 0 });
+    expect(h.uploads).toEqual([
+      { filename: "a.mp3", byte: 255 },
+      { filename: "b.mp3", byte: 196 },
+    ]);
+    expect(await listPendingRatings(db)).toEqual([]);
+    expect((await get(db, STORES.TRACKS, h.t1.key)).rating).toBe(5);
+    expect((await get(db, STORES.TRACKS, h.t1.key)).pendingUpload).toBeUndefined();
+    expect((await get(db, STORES.TRACKS, h.t2.key)).rating).toBe(4);
+    expect(h.changes.filter((c) => c.pending === false)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: h.t1.key, rating: 5 }),
+        expect.objectContaining({ key: h.t2.key, rating: 4 }),
+      ]),
+    );
+  });
+
+  it("konflikt tego samego Utworu: tylko najnowszy wpis wchodzi do uploadu (LWW)", async () => {
+    const h = makeMulti();
+    h.controller.rate(h.t1, 1);
+    await h.controller.whenIdle();
+    h.controller.rate(h.t1, 3);
+    await h.controller.whenIdle();
+    h.controller.rate(h.t1, 5);
+    await h.controller.whenIdle();
+
+    h.goOnline();
+    const summary = await h.controller.flush();
+    expect(summary.flushed).toBe(1);
+    expect(h.uploads).toEqual([{ filename: "a.mp3", byte: 255 }]);
+  });
+
+  it("rozbieżny Fingerprint → przerwanie z informacją, bez uploadu, ⏳ znika", async () => {
+    const h = makeMulti({
+      stat: async () => ({ parentfolderid: "100", size: 100, modified: 99 }),
+    });
+    h.controller.rate(h.t1, 5);
+    await h.controller.whenIdle();
+
+    h.goOnline();
+    const summary = await h.controller.flush();
+    expect(summary.aborted).toBe(1);
+    expect(h.uploads).toEqual([]);
+    expect(await listPendingRatings(db)).toEqual([]); // rekord nie wraca do kolejki
+    const last = h.changes.at(-1);
+    expect(last).toMatchObject({ key: h.t1.key, pending: false });
+    expect(last.info).toMatch(/file changed/i);
+    expect(last.rating).toBe(null); // rozbieżność unieważnia cache ocen (spec §4a)
+  });
+
+  it("flush przy martwej sieci → rekord zostaje, failed rośnie", async () => {
+    const h = makeMulti();
+    h.controller.rate(h.t1, 5);
+    await h.controller.whenIdle();
+
+    const summary = await h.controller.flush();
+    expect(summary.failed).toBe(1);
+    expect(await listPendingRatings(db)).toHaveLength(1);
+  });
+
+  it("udany zapis online przebija kolejkę (po każdym sukcesie)", async () => {
+    const h = makeMulti();
+    h.controller.rate(h.t2, 4); // do kolejki
+    await h.controller.whenIdle();
+    h.goOnline();
+
+    h.controller.rate(h.t1, 5); // sukces online → flush tła
+    await h.controller.whenIdle();
+
+    expect(h.uploads.map((u) => u.filename)).toEqual(["a.mp3", "b.mp3"]);
+    expect(await listPendingRatings(db)).toEqual([]);
   });
 });

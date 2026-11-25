@@ -27,7 +27,7 @@ Most players lock your ratings inside their own library database. rate-wave does
 1. **Connect a source** — sign in to pCloud (OAuth) or pick a local folder; the library listing is cached so it loads instantly next time.
 2. **Browse and play** — filter by year folder, search by filename, sort by name, rating, tempo, or last played.
 3. **Lazy tag read** — stars for visible tracks are read without downloading files: fetches ~8 KB ID3 heads through the batch `POST /head` proxy, parses them with `music-metadata` in a web worker (POPM rating: WMP frame wins, otherwise the highest byte of other frames; ReplayGain is stored in the cache for later use), then backfills the rest of the library in the background while you scroll.
-4. **Rate and tag** — click a star (or press `1`–`5`; `0` clears) and the stars update instantly. In the background the file is fetched through the READ-PROXY, its ID3v2.3 `POPM` frame is rewritten in the Windows Media Player convention (owner `Windows Media Player 9 Series`, WMP rating bytes, other frames and the audio untouched), and uploaded back over the same `fileid`. Saves run one at a time in click order; if one fails, the optimistic stars roll back to the last confirmed state.
+4. **Rate and tag** — click a star (or press `1`–`5`; `0` clears) and the stars update instantly. In the background the file is fetched through the READ-PROXY, its ID3v2.3 `POPM` frame is rewritten in the Windows Media Player convention (owner `Windows Media Player 9 Series`, WMP rating bytes, other frames and the audio untouched), and uploaded back over the same `fileid`. Saves run one at a time in click order. If the network is down or a save fails transiently, the rating is queued in IndexedDB and stays visible with a ⏳ until it is confirmed; the queue is flushed at startup, after every successful save, and manually via `window.flush`, always oldest-first with last-write-wins per track. A hard failure (e.g. the file changed since it was queued) rolls the optimistic stars back to the last confirmed state and reports it.
 5. **Resume anywhere** — the app remembers your session, restoring the last track and playback position on every visit.
 
 Ratings use the `POPM` tag in the Windows Media Player convention, so any compatible player (WMP, foobar2000, MusicBee, Mp3tag, Poweramp…) reads and writes the same stars. Nothing is deleted from your files — only the rating-related tag is touched.
@@ -81,8 +81,9 @@ src/
   store/db.js          — IndexedDB `rate-wave` v1: 6 stores + full data reset
   store/db.test.js     — schema & reset tests
   ratings/
-    rating-controller.js — optimistic rating writes: proxy bytes → ID3 rewrite → uploadfile, serialized
-    star-control.js      — five-star control shared by the list and the player
+    rating-controller.js — optimistic rating writes: proxy bytes → ID3 rewrite → uploadfile, serialized; queue + flush
+    pending-ratings.js   — `pending-ratings` store: one record per track (LWW), ordered by createdAt
+    star-control.js      — five-star control shared by the list and the player (with the ⏳ mark)
   tags/
     id3-writer.js        — ID3v2.3 POPM rewrite (WMP owner/bytes, remove = drop frame, foreign frames kept)
 vite.config.js         — base /rate-wave/, MPA (index + oauth), SW precache plugin
@@ -130,6 +131,6 @@ Local development: from the repo root, `npm install && npm run dev` starts **bot
 ## Status
 
 > [!WARNING]
-> **In active development.** The foundation (DB schema, app shell, PWA, icons), pCloud library, playback, lazy tag reads and the rating write path are in place; BPM tagging, waveforms, ReplayGain, filtering/search and the offline queue are being added ticket by ticket — see [GitHub Issues](https://github.com/danielmroczek/rate-wave/issues).
+> **In active development.** The foundation (DB schema, app shell, PWA, icons), pCloud library, playback, lazy tag reads, the rating write path and the offline rating queue are in place; BPM tagging, waveforms, ReplayGain, filtering/search, network detection and Background Sync are being added ticket by ticket — see [GitHub Issues](https://github.com/danielmroczek/rate-wave/issues).
 
 At the moment only the pCloud redirect URI registered in production works with the deployed app: `https://danielmroczek.github.io/rate-wave/oauth.html` (the Pages URL at the repo root is on pCloud's exact-match whitelist and needs `…/rate-wave/oauth.html` appended — details in [the registration research](docs/research/pcloud-register-app.md)).

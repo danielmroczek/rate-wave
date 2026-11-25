@@ -22,6 +22,7 @@ export function formatTime(sec) {
  * @param {{ db: IDBDatabase, token?: string, hostname?: string, getLink?: (t: any) => Promise<any>,
  *   createAudio?: () => any, saveIntervalMs?: number, playerEl?: HTMLElement, doc?: Document,
  *   onTrackChange?: (t: any) => void, getRating?: (key: string) => number | null,
+ *   isPending?: (key: string) => boolean,
  *   onRate?: (track: any, stars: number) => void }} opts
  */
 export function mountPlayer({
@@ -35,6 +36,7 @@ export function mountPlayer({
   doc = document,
   onTrackChange,
   getRating,
+  isPending,
   onRate,
 }) {
   const host = playerEl ?? doc.getElementById("player");
@@ -150,11 +152,13 @@ export function mountPlayer({
       btnPlay.textContent = state.playing ? "⏸" : "▶";
       const key = state.track?.key ?? null;
       const rating = key && getRating ? getRating(key) : null;
+      const pending = key != null && isPending ? isPending(key) : false;
       if (key !== lastStarsKey || rating !== lastStarsRating) {
         starsCtl.setRating(rating);
         lastStarsKey = key;
         lastStarsRating = rating;
       }
+      starsCtl.setPending(pending);
       // Autoplay po przywróceniu sesji może być zablokowany — podświetl play,
       // żeby „po tapnięciu” Utwór wznowił się od zapisanej pozycji.
       btnPlay.classList.toggle("pulse", state.status === "autoplay-blocked");
@@ -254,11 +258,12 @@ export function mountPlayer({
     get currentTrack() {
       return player.track;
     },
-    /** Synchronizacja gwiazdek z optimistic/confirmed zapisem (bilet #8). */
-    setRating(key, rating) {
+    /** Synchronizacja gwiazdek z optimistic/confirmed zapisem (bilety #8/#9). */
+    setRating(key, rating, pending = false) {
       if (player.track?.key !== key) return;
       lastStarsRating = rating;
       starsCtl.setRating(rating);
+      starsCtl.setPending(pending);
     },
     /** Pełny powrót: odczyt store `session` → { trackKey, positionSec } lub null. */
     restore() {

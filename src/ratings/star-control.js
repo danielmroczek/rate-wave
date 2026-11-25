@@ -21,6 +21,24 @@ export function setStarDisplay(el, rating) {
 }
 
 /**
+ * Znacznik „⏳ jeszcze nie zapisane" (bilet #9) — ten sam w wierszu i w playerze.
+ * @param {HTMLElement} el
+ * @param {boolean} pending
+ */
+export function setPendingDisplay(el, pending) {
+  let mark = /** @type {HTMLElement | null} */ (el.querySelector(".pending-mark"));
+  if (!mark) {
+    mark = el.ownerDocument.createElement("span");
+    mark.className = "pending-mark";
+    mark.textContent = "⏳";
+    mark.title = "Not saved yet";
+    mark.setAttribute("aria-label", "Not saved yet");
+    el.append(mark);
+  }
+  mark.hidden = !pending;
+}
+
+/**
  * @param {{ doc?: Document, onRate?: (stars: number) => void, label?: string }} [opts]
  */
 export function createStarControl({ doc = document, onRate, label = "Rating" } = {}) {
@@ -46,11 +64,15 @@ export function createStarControl({ doc = document, onRate, label = "Rating" } =
     el.append(btn);
   }
   setStarDisplay(el, null);
+  setPendingDisplay(el, false);
 
   return {
     element: el,
     setRating(/** @type {number | null} */ rating) {
       setStarDisplay(el, rating);
+    },
+    setPending(/** @type {boolean} */ pending) {
+      setPendingDisplay(el, pending);
     },
   };
 }

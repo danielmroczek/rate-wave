@@ -9,11 +9,12 @@ import { loadLibraryOrFetch, loadRatings, makeCounter } from "./library-controll
 import { loadLibrary, deleteLibrary } from "./library-cache.js";
 import { createRootPicker } from "./root-picker.js";
 import { createTagReadController } from "./tag-read-controller.js";
-import { createRatingController } from "../ratings/rating-controller.js";
-import { createStarControl, setStarDisplay } from "../ratings/star-control.js";
+import { createRatingController, EMPTY_FLUSH_SUMMARY } from "../ratings/rating-controller.js";
+import { createStarControl, setPendingDisplay, setStarDisplay } from "../ratings/star-control.js";
+import { listPendingRatings, pendingRatingStars } from "../ratings/pending-ratings.js";
 import { isEditableTarget } from "../ui/keyboard.js";
 import { HEAD_BATCH_CAP } from "../api/proxy-batch.js";
-import { get, put, STORES } from "../store/db.js";
+import { get, put, putMany, STORES } from "../store/db.js";
 import { loadSession } from "../player/player-state.js";
 
 /** Widok biblioteki zamontowany. */
@@ -30,6 +31,9 @@ let ratingKeyHandlerRef = /** @type {((e: KeyboardEvent) => void) | null} */ (nu
 
 /** Timer komunikatu o nieudanym zapisie. */
 let ratingNoteTimer = /** @type {any} */ (null);
+
+/** Hak `window.flush` ustawiony przez bieżący mount (sprzątany przy unmount). */
+let flushGlobalRef = /** @type {(() => Promise<any>) | null} */ (null);
 
 /** Leniwy import cienkiego klienta fetch — produkcja nie wstrzykuje pcloudApi. */
 async function resolveApi(/** @type {(o: any) => Promise<any> | undefined} */ injected) {
@@ -331,6 +335,25 @@ export async function mountLibraryView({
   /** @type {Map<string, any>} */
   const ratings = await loadRatings(db);
 
+  // Kolejka ocen z poprzedniej sesji (bilet #9): gwiazdki od razu, ale z ⏳
+  // aż do potwierdzenia flushu (kolejność wg createdAt pilnuje kontroler).
+  /** @type {Set<string>} */
+  const pendingKeys = new Set();
+  /** @type {Array<{store: string, key: IDBValidKey, value: any}>} */
+  const pendingEntries = [];
+  for (const rec of await listPendingRatings(db)) {
+    pendingKeys.add(rec.key);
+    const merged = {
+      ...ratings.get(rec.key),
+      rating: pendingRatingStars(rec),
+      pendingUpload: true,
+    };
+    ratings.set(rec.key, merged);
+    pendingEntries.push({ store: STORES.TRACKS, key: rec.key, value: merged });
+  }
+  // Cache ocen w IDB też widzi stan kolejki (§7: natychmiastowa aktualizacja).
+  if (pendingEntries.length) await putMany(db, pendingEntries);
+
   // ── odczyt tagów lazy (bilet #7): gwiazdki widocznych przez batchowy /head ──
   /** @type {ReturnType<typeof createTagReadController> | null} */
   let tagController = null;
@@ -341,7 +364,12 @@ export async function mountLibraryView({
       tracks: library.tracks,
       ratings,
       onTagsRead: (key, rec) => {
-        ratings.set(key, rec);
+        // Kolejka ma pierwszeństwo nad tagiem z pliku do czasu potwierdzenia (⏳).
+        if (pendingKeys.has(key)) {
+          ratings.set(key, { ...rec, rating: getRating(key), pendingUpload: true });
+        } else {
+          ratings.set(key, rec);
+        }
         refreshRowStars(key);
         updateCounter();
       },
@@ -363,10 +391,14 @@ export async function mountLibraryView({
       tracks: library.tracks,
       ratings,
       onChange: (key, state) => {
+        if (state.pending) pendingKeys.add(key);
+        else pendingKeys.delete(key);
         refreshRowStars(key);
         updateCounter();
         onRatingChange?.(key, state);
         if (state.error) showRatingError(state.error);
+        else if (state.info) showRatingNote(state.info);
+        else if (state.queued) showRatingNote("Rating queued — will retry when online.");
       },
       fetchBytes: ratingIO?.fetchBytes,
       statFile: ratingIO?.statFile,
@@ -383,14 +415,19 @@ export async function mountLibraryView({
   ratingNote.hidden = true;
   document.getElementById("count")?.after(ratingNote);
 
-  /** @param {Error} err */
-  function showRatingError(err) {
-    ratingNote.textContent = `Rating not saved: ${err.message}`;
+  /** @param {string} text */
+  function showRatingNote(text) {
+    ratingNote.textContent = text;
     ratingNote.hidden = false;
     if (ratingNoteTimer) clearTimeout(ratingNoteTimer);
     ratingNoteTimer = setTimeout(() => {
       ratingNote.hidden = true;
     }, 6000);
+  }
+
+  /** @param {Error} err */
+  function showRatingError(err) {
+    showRatingNote(`Rating not saved: ${err.message}`);
   }
 
   /** Aktualnie aktywny Rocznik (null = „wszystkie"). */
@@ -491,6 +528,7 @@ export async function mountLibraryView({
     const rating = rec && typeof rec.rating === "number" ? rec.rating : null;
     setStarDisplay(el, rating);
     el.classList.toggle("pending", !rating);
+    setPendingDisplay(el, pendingKeys.has(key));
   }
 
   /** Odświeża gwiazdki widocznego wiersza po odczycie tagów (bilet #7). */
@@ -540,6 +578,16 @@ export async function mountLibraryView({
   function getRating(key) {
     const rec = ratings.get(key);
     return rec && typeof rec.rating === "number" ? rec.rating : null;
+  }
+
+  /** Czy Ocena czeka w `pending-ratings` (⏳ w wierszu i w playerze). */
+  function isPending(key) {
+    return pendingKeys.has(key);
+  }
+
+  /** Ręczny/dev flush kolejki; w produkcji też start aplikacji i udany zapis online. */
+  function flush() {
+    return ratingController ? ratingController.flush() : Promise.resolve(EMPTY_FLUSH_SUMMARY);
   }
 
   /** Skróty 1–5 (ocena) i 0 (usuń) — dotyczą zaznaczonego Utworu (spec §5c). */
@@ -732,12 +780,22 @@ export async function mountLibraryView({
     console.warn("[library] session restore failed", err);
   }
 
+  // Flush kolejki przy starcie aplikacji (spec §7) + ręczny hak `window.flush`
+  // dla dev/testów. Bilet 13 dokłada tu tylko detektory sieci i Background Sync.
+  /** @type {any} */ (globalThis).flush = flush;
+  flushGlobalRef = flush;
+  void flush().catch(() => {});
+
   return {
     selectKey, // sync player → lista (transport N/P, bilet 06)
     /** Ocena Utworu z playera/skrótów (optimistic, bilet #8). */
     rate: rateKey,
     /** Ocena z cache w pamięci (player wyświetla gwiazdki). */
     getRating,
+    /** Czy Ocena czeka w kolejce (⏳, bilet #9). */
+    isPending,
+    /** Flush `pending-ratings` (bilet #9). */
+    flush,
   };
 }
 
@@ -749,6 +807,10 @@ export function unmountLibraryView() {
   ratingKeyHandlerRef = null;
   if (ratingNoteTimer) clearTimeout(ratingNoteTimer);
   ratingNoteTimer = null;
+  if (flushGlobalRef && /** @type {any} */ (globalThis).flush === flushGlobalRef) {
+    delete (/** @type {any} */ (globalThis).flush);
+  }
+  flushGlobalRef = null;
   document.getElementById("rating-note")?.remove();
   mounted = false;
   document.getElementById("library-layout")?.remove();

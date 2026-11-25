@@ -260,3 +260,28 @@ describe("mountPlayer — gwiazdki oceny (bilet 08)", () => {
     expect(rated).toEqual([["pcloud|1", 3]]);
   });
 });
+
+describe("mountPlayer — ⏳ dla kolejki ocen (bilet 09)", () => {
+  it("isPending pokazuje znacznik przy Utworze; setRating(key, rating, pending) go przełącza", async () => {
+    const view = mount({
+      getRating: () => 4,
+      isPending: (key) => key === "pcloud|1",
+    });
+    await view.play(TRACK);
+    const mark = () => document.querySelector("#pstars .pending-mark");
+    expect(mark()?.hidden).toBe(false);
+
+    view.setRating("pcloud|1", 4, false);
+    expect(mark()?.hidden).toBe(true);
+
+    view.setRating("pcloud|1", 4, true);
+    expect(mark()?.hidden).toBe(false);
+  });
+
+  it("znacznik dotyczy tylko bieżącego Utworu", async () => {
+    const view = mount({ getRating: () => 3, isPending: () => false });
+    await view.play(TRACK);
+    view.setRating("pcloud|2", 5, true);
+    expect(document.querySelector("#pstars .pending-mark")?.hidden).toBe(true);
+  });
+});

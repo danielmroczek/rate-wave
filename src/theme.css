@@ -468,6 +468,14 @@ dialog#dlg-reset menu {
   opacity: 0.35;
 }
 
+/* ⏳ „jeszcze nie zapisane" (bilet #9): obok gwiazdek w wierszu i w playerze. */
+.pending-mark {
+  font-size: 11px;
+  line-height: 1;
+  margin-left: 4px;
+  letter-spacing: 0;
+}
+
 /* Gwiazdki oceny (bilet #8): pięć przycisków bez ramek, FLAT/METRO. */
 .star-rating {
   display: inline-flex;

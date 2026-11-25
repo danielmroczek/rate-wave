@@ -260,6 +260,7 @@ describe("mountLibraryView — selectKey: sync player → lista (bilet 06)", () 
 import { vi } from "vitest";
 import { saveLibrary, saveTracks } from "./library-cache.js";
 import { saveSession } from "../player/player-state.js";
+import { enqueuePendingRating, listPendingRatings } from "../ratings/pending-ratings.js";
 
 /** happy-dom: clientHeight=0 → windowed lista nie renderuje rzędów; mock 440px. */
 function stubListHeight() {
@@ -500,6 +501,99 @@ describe("mountLibraryView — ocena (bilet 08)", () => {
     expect(row.querySelector(".star-btn[data-star='5']").textContent).toBe("☆");
     expect(document.getElementById("rating-note").hidden).toBe(false);
     expect(document.getElementById("rating-note").textContent).toContain("upload failed");
+    restoreHeight.mockRestore();
+  });
+});
+
+// ── Bilet 09: pending-ratings + ⏳ ─────────────────────────────────────────
+
+describe("mountLibraryView — kolejka ocen i ⏳ (bilet 09)", () => {
+  /** @returns {HTMLElement | null} */
+  function pendingMark(key) {
+    const row = document.querySelector(`.track-row[data-key="${key}"]`);
+    return row?.querySelector(".pending-mark") ?? null;
+  }
+
+  it("rekord kolejki z poprzedniej sesji → gwiazdki + ⏳; start aplikacji flushuje i ⏳ znika", async () => {
+    const restoreHeight = stubListHeight();
+    await seedCache(db);
+    await enqueuePendingRating(db, {
+      key: "pcloud|900",
+      fingerprint: { size: MP3_BYTES.length, modified: 1 },
+      ratingByte: 255,
+      action: "set",
+      createdAt: 1,
+    });
+    const uploads = [];
+    const api = await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+      ratingIO: {
+        fetchBytes: async () => MP3_BYTES,
+        statFile: async () => ({ parentfolderid: "50", size: MP3_BYTES.length, modified: 1 }),
+        upload: async ({ filename, bytes }) => {
+          uploads.push(filename);
+          return { fileid: 900, name: filename, size: bytes.length, modified: 20 };
+        },
+        now: () => 7,
+      },
+    });
+
+    expect(api.getRating("pcloud|900")).toBe(5);
+    expect(pendingMark("pcloud|900")?.hidden).toBe(false);
+
+    await waitFor(() => uploads.length === 1);
+    expect(await listPendingRatings(db)).toEqual([]);
+    await waitFor(() => pendingMark("pcloud|900")?.hidden === true);
+    expect(api.getRating("pcloud|900")).toBe(5);
+    restoreHeight.mockRestore();
+  });
+
+  it("ocena przy martwej sieci → ⏳ zostaje; window.flush po powrocie sieci potwierdza", async () => {
+    const restoreHeight = stubListHeight();
+    const seeded = await seedCache(db);
+    const tracks = seeded.map((t) => ({
+      ...t,
+      size: MP3_BYTES.length,
+      fingerprint: { size: MP3_BYTES.length, modified: 1 },
+    }));
+    await saveTracks(db, tracks);
+    await saveLibrary(db, { tracks, roczniki: [], fingerprint: { size: 3, modified: 2 } });
+    let online = false;
+    const uploads = [];
+    const api = await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+      ratingIO: {
+        fetchBytes: async () => {
+          if (!online) throw new TypeError("Failed to fetch");
+          return MP3_BYTES;
+        },
+        statFile: async () => ({ parentfolderid: "50", size: MP3_BYTES.length, modified: 1 }),
+        upload: async ({ filename, bytes }) => {
+          uploads.push(filename);
+          return { fileid: 900, name: filename, size: bytes.length, modified: 20 };
+        },
+        now: () => 7,
+      },
+    });
+
+    const row = document.querySelector('.track-row[data-key="pcloud|900"]');
+    row.querySelector('.star-btn[data-star="4"]').click();
+    expect(api.getRating("pcloud|900")).toBe(4);
+    await waitFor(async () => (await listPendingRatings(db)).length === 1);
+    expect(pendingMark("pcloud|900")?.hidden).toBe(false);
+
+    online = true;
+    await globalThis.flush();
+    expect(uploads).toEqual(["t.mp3"]);
+    expect(await listPendingRatings(db)).toEqual([]);
+    await waitFor(() => pendingMark("pcloud|900")?.hidden === true);
+    expect(api.getRating("pcloud|900")).toBe(4);
     restoreHeight.mockRestore();
   });
 });

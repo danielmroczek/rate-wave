@@ -79,7 +79,7 @@ async function boot() {
       // Transport N/P zmienia Utwór w playerze (inny stan niż zaznaczenie
       // listy) — sync przez onTrackChange → library-view.selectKey.
       let notifyTrackChange = /** @type {((t: any) => void) | null} */ (null);
-      /** @type {{ selectKey: (key: string) => boolean, rate: (key: string, stars: 1|2|3|4|5|null) => boolean, getRating: (key: string) => number | null } | undefined} */
+      /** @type {{ selectKey: (key: string) => boolean, rate: (key: string, stars: 1|2|3|4|5|null) => boolean, getRating: (key: string) => number | null, isPending?: (key: string) => boolean, flush?: () => Promise<any> } | undefined} */
       let libraryApi;
       const player =
         creds?.token && creds?.hostname
@@ -89,6 +89,7 @@ async function boot() {
               hostname: creds.hostname,
               onTrackChange: (t) => notifyTrackChange?.(t),
               getRating: (key) => libraryApi?.getRating(key) ?? null,
+              isPending: (key) => libraryApi?.isPending?.(key) ?? false,
               onRate: (track, stars) => {
                 libraryApi?.rate(track.key, /** @type {1|2|3|4|5} */ (stars));
               },
@@ -104,7 +105,8 @@ async function boot() {
         folderName: creds?.folderName ?? null,
         onPlay: player ? (track, opts) => void player.play(track, opts) : undefined,
         onPlaylist: player ? (tracks) => player.setPlaylist(tracks) : undefined,
-        onRatingChange: (key, state) => player?.setRating(key, state.rating),
+        onRatingChange: (key, state) =>
+          player?.setRating(key, state.rating, state.pending ?? false),
       })
         .then((api) => {
           libraryApi = api;

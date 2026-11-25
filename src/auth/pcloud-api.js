@@ -27,6 +27,7 @@ export async function pcloudApi({ method, params = {}, token, hostname }) {
   }
   if (!res.ok) {
     const e = new Error(`pCloud API HTTP ${res.status}`);
+    e.status = res.status;
     e.isAuthError = res.status === 401 || res.status === 403;
     throw e;
   }
@@ -85,6 +86,7 @@ export async function uploadFileOverwrite({
   }
   if (!res.ok) {
     const e = new Error(`pCloud upload HTTP ${res.status}`);
+    e.status = res.status;
     e.isAuthError = res.status === 401 || res.status === 403;
     throw e;
   }

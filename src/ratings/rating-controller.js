@@ -1,22 +1,49 @@
-// Zapis oceny (bilet #8, spec §10a krok 1 z 2): optimistic UI → bajty przez
-// READ-PROXY → rewrite ID3v2.3 (ramka WMP) → uploadfile overwrite → cache
-// `tracks` z nowym Fingerprintem. Uploady są serializowane (kolejność kliknięć =
-// kolejność wysyłki); pełna kolejka z flagą ⏳ i pending-ratings to bilet #9.
+// Zapis oceny (bilety #8/#9, spec §10a): optimistic UI → bajty przez READ-PROXY
+// → rewrite ID3v2.3 (ramka WMP) → uploadfile overwrite → cache `tracks` z nowym
+// Fingerprintem. Uploady są serializowane (kolejność kliknięć = kolejność wysyłki).
 //
-// Awaria: optimistic jest wycofywany do ostatniego potwierdzonego stanu (czytanego
-// z IDB), więc UI nie kłamie. Późniejszy klik nie jest nadpisywany wynikiem
-// starszego uploadu, który właśnie się zakończył.
+// Awaria trwała: optimistic jest wycofywany do ostatniego potwierdzonego stanu
+// (czytanego z IDB), więc UI nie kłamie. Awaria przejściowa (sieć/offline):
+// ocena ląduje w `pending-ratings` (LWW po Utworze) i zostaje w UI z ⏳ do czasu
+// potwierdzenia; flush() wysyła kolejkę wg `createdAt` z read-checkiem
+// Fingerprintu. Detektory sieci + Background Sync dokłada bilet 13.
 
 import { fetchTrackStream } from "../api/worker-proxy.js";
 import { pcloudApi, uploadFileOverwrite } from "../auth/pcloud-api.js";
 import { PCLOUD_SOURCE_KEY } from "../auth/token-store.js";
-import { get, putMany, STORES } from "../store/db.js";
+import { get, put, putMany, STORES } from "../store/db.js";
 import { loadLibrary } from "../library/library-cache.js";
-import { rewriteId3Rating } from "../tags/id3-writer.js";
+import { rewriteId3Rating, starsToByte } from "../tags/id3-writer.js";
+import {
+  enqueuePendingRating,
+  listPendingRatings,
+  pendingRatingStars,
+  removePendingRating,
+} from "./pending-ratings.js";
 
 /** @param {any} rec */
 function ratingOf(rec) {
   return rec && typeof rec.rating === "number" ? rec.rating : null;
+}
+
+/**
+ * Awaria przejściowa = warto spróbować później (sieć, offline, timeout, 5xx, sesja).
+ * Błędy trwałe (zły fileid, brak Utworu, 4xx inne niż sesja) nie wracają do kolejki.
+ * @param {unknown} err
+ */
+export function isTransientError(err) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+  const e = /** @type {any} */ (err);
+  if (e?.isNetworkError || e?.isAuthError) return true;
+  if (typeof e?.status === "number") {
+    return [401, 403, 408, 429].includes(e.status) || e.status >= 500;
+  }
+  if (e?.name === "TypeError" || e?.name === "AbortError" || e?.name === "NetworkError")
+    return true;
+  const message = String(e?.message ?? e ?? "");
+  return /network|failed to fetch|fetch failed|offline|unavailable|timeout|timed out/i.test(
+    message,
+  );
 }
 
 /** @param {{ token: string, hostname?: string, fileid: number }} opts */
@@ -50,8 +77,27 @@ let uploadTail = Promise.resolve();
  * @property {(opts: { token: string, hostname?: string, fileid: number }) => Promise<Uint8Array>} [fetchBytes]
  * @property {(opts: { token: string, hostname?: string, fileid: number }) => Promise<any>} [statFile]
  * @property {(opts: any) => Promise<{ fileid: number, name?: string, size: number, modified: number }>} [upload]
+ * @property {(err: unknown) => boolean} [isTransient] — awaria przejściowa → kolejka zamiast rollbacku
  * @property {() => number} [now]
  */
+
+/**
+ * @typedef {object} FlushSummary
+ * @property {number} flushed
+ * @property {number} aborted
+ * @property {number} failed
+ * @property {number} skipped
+ */
+
+/** @type {FlushSummary} */
+export const EMPTY_FLUSH_SUMMARY = Object.freeze({
+  flushed: 0,
+  aborted: 0,
+  failed: 0,
+  skipped: 0,
+});
+
+const FILE_CHANGED = "File changed since the rating was queued — rating was not saved.";
 
 /**
  * @param {RatingControllerOpts} opts
@@ -66,6 +112,7 @@ export function createRatingController({
   fetchBytes = defaultFetchBytes,
   statFile = defaultStatFile,
   upload = uploadFileOverwrite,
+  isTransient = isTransientError,
   now = () => Date.now(),
 }) {
   const byKey = new Map(tracks.map((t) => [t.key, t]));
@@ -87,7 +134,7 @@ export function createRatingController({
     }
   }
 
-  /** @param {() => Promise<void>} task */
+  /** @param {() => Promise<any>} task */
   function enqueue(task) {
     outstanding++;
     const run = uploadTail.then(task, task);
@@ -96,6 +143,7 @@ export function createRatingController({
       () => {},
     );
     run.then(settle, settle).catch(() => {});
+    return run;
   }
 
   /**
@@ -158,10 +206,58 @@ export function createRatingController({
           );
         }
         await commit(track, rewritten, meta, version);
+        // Potwierdzone online → ewentualna starsza pozycja kolejki jest nieaktualna.
+        // Bezpieczne: kolejka jest serializowana, więc nowszy klik jeszcze nie zdążył
+        // dopisać swojego rekordu.
+        await removePendingRating(db, key);
+        // Nowy zapis online = okazja do przebicia kolejki (spec §7).
+        void flush().catch((e) => console.warn("[rating] background flush failed", e));
       } catch (err) {
-        await rollback(key, version, /** @type {Error} */ (err));
+        if (isTransient(err)) {
+          await queuePending(key, track, stars, version, /** @type {Error} */ (err));
+        } else {
+          await rollback(key, version, /** @type {Error} */ (err));
+        }
       }
     });
+  }
+
+  /**
+   * Awaria przejściowa: zostaw optimistic (⏳) i dopisz do kolejki (LWW po kluczu).
+   * @param {string} key
+   * @param {import("../library/listing.js").LibraryTrack | null} track
+   * @param {1|2|3|4|5|null} stars
+   * @param {number} version
+   * @param {Error} error
+   */
+  async function queuePending(key, track, stars, version, error) {
+    const fallback = track?.fingerprint ?? (await get(db, STORES.TRACKS, key))?.fingerprint ?? null;
+    try {
+      await enqueuePendingRating(db, {
+        key,
+        fingerprint: fallback,
+        ratingByte: stars == null ? 0 : starsToByte(stars),
+        action: stars == null ? "remove" : "set",
+        createdAt: now(),
+      });
+    } catch (e) {
+      console.warn("[rating] queue failed", e);
+      await rollback(key, version, error);
+      return;
+    }
+    const prev = ratings.get(key) ?? {};
+    const queued = { ...prev, rating: stars, pendingUpload: true };
+    ratings.set(key, queued);
+    // Cache ocen w IDB niesie stan kolejki (§7), żeby restart i listing widziały ⏳.
+    try {
+      const record = (await get(db, STORES.TRACKS, key)) ?? {};
+      await put(db, STORES.TRACKS, key, { ...record, rating: stars, pendingUpload: true });
+    } catch (e) {
+      console.warn("[rating] pending cache update failed", e);
+    }
+    if (versions.get(key) === version) {
+      onChange(key, { rating: stars, pending: true, queued: true });
+    }
   }
 
   /**
@@ -194,6 +290,7 @@ export function createRatingController({
       ratingSource: rewritten.ratingSource,
       tagsReadAt: now(),
     };
+    delete record.pendingUpload;
     /** @type {any[]} */
     const entries = [{ store: STORES.TRACKS, key, value: record }];
     if (library) entries.push({ store: STORES.LIBRARY, key: PCLOUD_SOURCE_KEY, value: library });
@@ -222,6 +319,7 @@ export function createRatingController({
       const record = await get(db, STORES.TRACKS, key);
       const rating = record ? ratingOf(record) : (confirmed.get(key) ?? null);
       if (record) {
+        delete record.pendingUpload;
         ratings.set(key, record);
       } else {
         const prev = ratings.get(key) ?? {};
@@ -237,9 +335,127 @@ export function createRatingController({
     }
   }
 
+  /**
+   * Read-check Fingerprintu: rozbieżność = plik zmienił się od kolejkowania.
+   * @param {{ size: number, modified: number } | null} fp
+   * @param {any} meta
+   */
+  function fingerprintDiverged(fp, meta) {
+    if (!fp || !meta) return false;
+    if (typeof meta.size === "number" && fp.size !== meta.size) return true;
+    if (typeof meta.modified === "number" && fp.modified !== meta.modified) return true;
+    return false;
+  }
+
+  /**
+   * Informuje UI, że pozycja kolejki została odrzucona (rozbieżny Fingerprint)
+   * i czyści ⏳; pola tagowe cache są unieważniane (spec §4a).
+   * @param {string} key
+   * @param {any} rec
+   * @param {string} message
+   */
+  async function abortQueued(key, rec, message) {
+    await removePendingRating(db, key, { ifCreatedAt: rec.createdAt });
+    // Rozbieżny Fingerprint unieważnia pola tagowe cache (spec §4a) — gwiazdki nie kłamią.
+    const record = (await get(db, STORES.TRACKS, key)) ?? {};
+    delete record.pendingUpload;
+    record.rating = null;
+    record.ratingSource = null;
+    record.tagsReadAt = null;
+    await put(db, STORES.TRACKS, key, record);
+    ratings.set(key, record);
+    onChange(key, { rating: null, pending: false, info: message });
+  }
+
+  /**
+   * Wysyła JEDEN rekord kolejki. Zwraca wynik dla podsumowania flushu.
+   * @param {import("./pending-ratings.js").PendingRating} rec
+   * @returns {Promise<"flushed"|"aborted"|"failed"|"skipped"|"transient">}
+   */
+  async function flushOne(rec) {
+    const { key } = rec;
+    const track = byKey.get(key);
+    if (!track) return "skipped"; // inny root/Źródło — rekord czeka na swoją bibliotekę
+
+    // 1. Tani read-check metadanych przed pobraniem całego pliku.
+    if (rec.fingerprint) {
+      try {
+        const meta = await statFile({ token, hostname, fileid: Number(track.fileid) });
+        if (fingerprintDiverged(rec.fingerprint, meta)) {
+          await abortQueued(key, rec, FILE_CHANGED);
+          return "aborted";
+        }
+      } catch (err) {
+        if (isTransient(err)) return "transient";
+        // Trwały błąd statu nie blokuje zapisu — fetch i tak sprawdzi rozmiar.
+      }
+    }
+
+    const stars = pendingRatingStars(rec);
+    const version = versions.get(key) ?? 0;
+
+    try {
+      const folderId = await folderIdFor(track);
+      const original = await fetchBytes({ token, hostname, fileid: Number(track.fileid) });
+      // 2. Read-check po bajtach: inny rozmiar = inny plik niż kolejkowany.
+      if (fingerprintDiverged(rec.fingerprint, { size: original.byteLength })) {
+        await abortQueued(key, rec, FILE_CHANGED);
+        return "aborted";
+      }
+      const rewritten = rewriteId3Rating(original, { stars });
+      const meta = await upload({
+        token,
+        hostname,
+        folderId,
+        filename: track.name,
+        bytes: rewritten.bytes,
+      });
+      if (Number(meta.fileid) !== Number(track.fileid)) {
+        throw new Error(
+          `rating: uploadfile returned fileid ${meta.fileid}, expected ${track.fileid}`,
+        );
+      }
+      await commit(track, rewritten, meta, version);
+      await removePendingRating(db, key, { ifCreatedAt: rec.createdAt });
+      return "flushed";
+    } catch (err) {
+      if (isTransient(err)) return "transient"; // rekord zostaje na następny flush
+      await removePendingRating(db, key, { ifCreatedAt: rec.createdAt });
+      await rollback(key, version, /** @type {Error} */ (err));
+      return "failed";
+    }
+  }
+
+  /**
+   * Flush `pending-ratings` (spec §7): kolejność = `createdAt`, max 1 upload naraz.
+   * Wywoływany przy starcie aplikacji, po udanym zapisie online i przez
+   * `window.flush` (dev). Bilet 13 dokłada `online` + Background Sync.
+   * @returns {Promise<FlushSummary>}
+   */
+  function flush() {
+    return enqueue(async () => {
+      const records = await listPendingRatings(db);
+      /** @type {FlushSummary} */
+      const summary = { ...EMPTY_FLUSH_SUMMARY };
+      for (const rec of records) {
+        const outcome = await flushOne(rec);
+        if (outcome === "flushed") summary.flushed++;
+        else if (outcome === "aborted") summary.aborted++;
+        else if (outcome === "skipped") summary.skipped++;
+        else {
+          summary.failed++;
+          // Sieć padła — dalsze rekordy i tak nie przejdą; zostają w kolejce.
+          if (outcome === "transient") break;
+        }
+      }
+      return summary;
+    });
+  }
+
   return {
     rate,
-    /** Czeka aż kolejka uploadów się opróżni (testy, flush w bilecie #9). */
+    flush,
+    /** Czeka aż kolejka uploadów się opróżni (testy, zamknięcie aplikacji). */
     whenIdle() {
       if (outstanding === 0) return Promise.resolve();
       return new Promise((resolve) => idleResolvers.push(resolve));

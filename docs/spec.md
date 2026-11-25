@@ -17,7 +17,7 @@ Aplikacja vanilla-JS (desktop Chrome + Android Chrome) — playlista ~3635 nagra
 - **Proxy:** dokładnie jeden — **Cloudflare Worker jako READ-PROXY** (pobranie bajtów pliku do rewrite oceny i/lub waveformu). **Wszystko inne bezpośrednio z przeglądarki** [bilety 06, 11, 14].
 - **Interop ocen:** obowiązkowy — standard WMP [bilety 01, 10].
 - **Mobile-first z wysokim priorytetem** (ocenianie w pociągu) [bilet 15].
-- **Offline w MVP:** brak odtwarzania offline z pCloud (CORS); „Pełny powrót sesji" + **kolejka ocen offline** (`pending-ratings`) [bilet 15].
+- **Offline w MVP:** brak odtwarzania offline z pCloud (CORS); „Pełny powrót sesji" + **kolejka ocen offline** (`pending-ratings`) [bilety 09, 13].
 - **Zmiany startu/pętli, docki:** POST-MVP, nie scope [bilet 18].
 
 ### 1a. Faktory empiryczne (badania własne, 2026-10-27/28)
@@ -96,7 +96,7 @@ Aplikacja korzysta z tych potwierdzonych faktów (raport `research/pcloud-api.md
 | `sources` | `pcloud` / `local` | token mirror, folderid, hostname/locationid; handle FSA + stan zgód | |
 | `library` | source-id | listing per Źródło + Fingerprint | 1× recursive listing; my, całe drzewo |
 | `tracks` | `'pcloud|'+fileid` / `'local|'+relpath` | `{ fingerprint{size, modified}, rating: 1–5\|~~null~~, gain, peak, RG-source, peaks (Uint8Array 800), lastPlayed, pendingUpload? }` | **ocena jako pochodna tagu**; `lastPlayed` **przeżywa** unieważnienie (usuwa się tylko pola tagowe) [bilet 17 suplement] |
-| `pending-ratings` | `'pcloud\|'+fileid` / `'local\|'+relpath` | `{ fingerprint, ratingByte, action: set\|remove, createdAt }` | kolejka ocen offline [bilet 15] |
+| `pending-ratings` | `'pcloud\|'+fileid` / `'local\|'+relpath` | `{ fingerprint, ratingByte, action: set\|remove, createdAt }` | kolejka ocen offline [bilety 09, 13] |
 | `session` | singleton | `{ source, trackKey, positionSec }` | odtwarzane na starcie (Pełny powrót) |
 
 ### 4b. Zachowania
@@ -176,7 +176,7 @@ Aplikacja korzysta z tych potwierdzonych faktów (raport `research/pcloud-api.md
 ## 7. PWA i offline
 
 - **PWA:** manifest + instalacja na ekranie telefonu; Service Worker: **app shell cache** (HTML/JS/CSS) — budowa build-time.
-- **Offline w MVP [bilet 15]:** „Pełny powrót sesji" (4a) + **kolejka ocen offline**:
+- **Offline w MVP [bilety 09, 13]:** „Pełny powrót sesji" (4a) + **kolejka ocen offline**:
   - ocena offline → zapis do `pending-ratings` + natychmiastowa aktualizacja cache ocen (UI widzi gwiazdki ⏳ „oczekuje na wysłanie");
   - **flush:** przy starcie aplikacji (po walidacji tokenu), na `window.online`, po każdym udanym zapisie online;
   - Background Sync (`sync` tag `flush-ratings`) = **progressive enhancement** (Chrome Android działa bez zainstalowanej PWA; fallback to flush na starcie);
@@ -243,6 +243,8 @@ workers/
 6. UI: gwiazdki natychmiast (optimistic), ⏳ znika po sukcesie
 
 **Offline:** steps 1–5 opóźnione → zapisz `pending-ratings` + gwiazdka ⏳; flush przy starcie/online.
+
+**Kolejka (bilet #9):** jeden rekord na Utwór w `pending-ratings` (LWW — ostatni klik wygrywa); flush wg `createdAt`, max 1 upload naraz, przy starcie aplikacji, po każdym udanym zapisie online i na `window.flush`; przed uploadem read-check Fingerprintu (rozbieżność = przerwanie z komunikatem, rekord znika); po sukcesie cache `tracks` i gwiazdki są spójne, ⏳ znika. Detektory sieci + Background Sync dokłada bilet 13.
 
 ### 10b. Pierwsze uruchomienie (onboarding)
 
