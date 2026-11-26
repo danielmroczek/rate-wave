@@ -131,6 +131,6 @@ Local development: from the repo root, `npm install && npm run dev` starts **bot
 ## Status
 
 > [!WARNING]
-> **In active development.** The foundation (DB schema, app shell, PWA, icons), pCloud library, playback, lazy tag reads, the rating write path and the offline rating queue are in place; BPM tagging, waveforms, ReplayGain, filtering/search, network detection and Background Sync are being added ticket by ticket — see [GitHub Issues](https://github.com/danielmroczek/rate-wave/issues).
+> **In active development.** The foundation (DB schema, app shell, PWA, icons), pCloud library, playback, lazy tag reads, the rating write path, the offline rating queue, sorting/search (`#12`) and keyboard shortcuts are in place; BPM tagging, waveforms, ReplayGain, network detection and Background Sync are being added ticket by ticket — see [GitHub Issues](https://github.com/danielmroczek/rate-wave/issues).
 
 At the moment only the pCloud redirect URI registered in production works with the deployed app: `https://danielmroczek.github.io/rate-wave/oauth.html` (the Pages URL at the repo root is on pCloud's exact-match whitelist and needs `…/rate-wave/oauth.html` appended — details in [the registration research](docs/research/pcloud-register-app.md)).

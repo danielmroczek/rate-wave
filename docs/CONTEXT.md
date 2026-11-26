@@ -57,8 +57,12 @@ Polityka konfliktów, także między kartami: wygrywa ostatni zapis, bez ostrze�
 _Avoid_: merge, rozwiązywanie konfliktów
 
 **Rocznik (Year folder)**:
-Podfolder Źródła nazywany od roku nagrania (2017–2026); jedyny filtr listy — drzewko po lewej: klik = filtr, „wszystkie" = reset, aktywny podświetlony pełnym tłem. Wszystkie Roczniki widoczne zawsze (nawet przy pustych wynikach — lista ma nie zaskakiwać).
+Podfolder Źródła nazywany od roku nagrania (2017–2026); główny filtr listy — drzewko po lewej: klik = filtr, „wszystkie" = reset, aktywny podświetlony pełnym tłem. Wszystkie Roczniki widoczne zawsze (nawet przy pustych wynikach — lista ma nie zaskakiwać). Obok Rocznika listę zawęża jeszcze Szukajka (§5e) — oba filtry składają się.
 _Avoid_: katalog, folder (w UI), tagowanie dat
+
+**Szukajka (Search)**:
+Filtr listy po nazwie pliku: substring bez rolowania wielkością liter, debounce ~200 ms. Działa na bieżącej liście (Rocznik + sort), współpracuje z jazdą po nieocenionych.
+_Avoid_: wyszukiwarka, query, FTS
 
 **Proxy odczytu (Read Proxy)**:
 Jedyny komponent pośredniczący — Cloudflare Worker — przez który przeglądarka uzyskuje bajty Utworów z pCloud: passthrough linku do plików plus strumień bajtów z AACO. Odczyty przez `fetch` idą przez Proxy odczytu; odtwarzanie przez element mediowy może iść bezpośrednio.
