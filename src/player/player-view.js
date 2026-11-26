@@ -23,7 +23,8 @@ export function formatTime(sec) {
  *   createAudio?: () => any, saveIntervalMs?: number, playerEl?: HTMLElement, doc?: Document,
  *   onTrackChange?: (t: any) => void, getRating?: (key: string) => number | null,
  *   isPending?: (key: string) => boolean,
- *   onRate?: (track: any, stars: number) => void }} opts
+ *   onRate?: (track: any, stars: number) => void,
+ *   onNextUnrated?: () => boolean }} opts
  */
 export function mountPlayer({
   db,
@@ -38,6 +39,7 @@ export function mountPlayer({
   getRating,
   isPending,
   onRate,
+  onNextUnrated,
 }) {
   const host = playerEl ?? doc.getElementById("player");
   if (!host) throw new Error("mountPlayer: #player not found");
@@ -114,7 +116,14 @@ export function mountPlayer({
   btnNext.className = "tbtn";
   btnNext.title = "Next (N)";
   btnNext.textContent = "⏭";
-  transport.append(btnPrev, btnPlay, btnNext);
+  // „→ ☆”: następny nieoceniony na bieżącej liście (spec §5b; bilet 12)
+  const btnNextUnrated = doc.createElement("button");
+  btnNextUnrated.type = "button";
+  btnNextUnrated.id = "pbtn-next-unrated";
+  btnNextUnrated.className = "tbtn";
+  btnNextUnrated.title = "Next unrated (U)";
+  btnNextUnrated.textContent = "→ ☆";
+  transport.append(btnPrev, btnPlay, btnNext, btnNextUnrated);
 
   host.append(title, stars, waveRow, transport, note);
 
@@ -185,6 +194,10 @@ export function mountPlayer({
   });
   btnPrev.addEventListener("click", () => void player.step(playlist, -1));
   btnNext.addEventListener("click", () => void player.step(playlist, 1));
+  if (onNextUnrated) {
+    btnNextUnrated.addEventListener("click", () => onNextUnrated());
+    // kolejny nieoceniony: przycisk „→ ☆” + skrót U (spec §5b/§5c)
+  }
 
   // ── scrubbing: klik/tap/drag po waveformie (pointer events)
   // + ←/→ ±10 s na focusie (jak w prototypie) ──────────────────
@@ -236,6 +249,10 @@ export function mountPlayer({
     } else if (e.key === "p" || e.key === "P") {
       e.preventDefault();
       void player.step(playlist, -1);
+    } else if (onNextUnrated && (e.key === "u" || e.key === "U")) {
+      // kolejny nieoceniony (spec §5c)
+      e.preventDefault();
+      onNextUnrated();
     }
   }
   doc.addEventListener("keydown", onKey);

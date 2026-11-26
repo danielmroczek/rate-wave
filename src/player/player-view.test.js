@@ -285,3 +285,37 @@ describe("mountPlayer — ⏳ dla kolejki ocen (bilet 09)", () => {
     expect(document.querySelector("#pstars .pending-mark")?.hidden).toBe(true);
   });
 });
+
+// ── Bilet 12: „→ ☆” (następny nieoceniony) + skrót U ───────────────────────
+
+describe("mountPlayer — „→ ☆” (bilet 12)", () => {
+  it("przycisk „→ ☆” woła onNextUnrated", async () => {
+    const calls = [];
+    mount({
+      onNextUnrated: () => {
+        calls.push(1);
+        return true;
+      },
+    });
+    document.getElementById("pbtn-next-unrated").click();
+    expect(calls.length).toBe(1);
+  });
+
+  it("klawisz U (i tylko U) woła onNextUnrated", async () => {
+    const calls = [];
+    mount({
+      onNextUnrated: () => {
+        calls.push(1);
+        return true;
+      },
+    });
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "u", bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "U", bubbles: true }));
+    expect(calls.length).toBe(2);
+  });
+
+  it("brak onNextUnrated → klik/przycisk nie rzuca", async () => {
+    mount();
+    expect(() => document.getElementById("pbtn-next-unrated").click()).not.toThrow();
+  });
+});

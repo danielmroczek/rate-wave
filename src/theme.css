@@ -372,7 +372,9 @@ dialog#dlg-reset menu {
 /* ── biblioteka pCloud (bilet 04): drzewko Roczników + windowed lista ── */
 
 /* tryb biblioteki: viewport bez domyślnego scroll-paddingu — zarządza nim layout */
-.viewport-library {
+/* ID specificity wygrywa z `#viewport { padding: var(--pad) }` — w trybie
+   biblioteki layout ma być flush z krawędziami (zerowy padding viewportu) */
+#viewport.viewport-library {
   display: flex;
   padding: 0;
   overflow: hidden;
@@ -381,21 +383,8 @@ dialog#dlg-reset menu {
 #library-layout {
   display: grid;
   grid-template-columns: 200px 1fr;
-  gap: var(--pad);
   width: 100%;
   min-height: 0;
-}
-
-/* mobile: Roczniki zawinięte poziomo (dyrektywa FLAT/METRO) */
-@media (max-width: 767px) {
-  #library-layout {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
-  }
-  #roczniki {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
 }
 
 #roczniki {
@@ -404,6 +393,28 @@ dialog#dlg-reset menu {
   gap: 2px;
   padding: var(--pad) 0 var(--pad) var(--pad);
   overflow-y: auto;
+}
+
+/* Wspólny styl scrollbarów FLAT/METRO — pionowe (Roczniki desktop, lista
+   plików) i poziome (Roczniki mobile) wyglądają identycznie (bilet 12). */
+#roczniki,
+#track-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg4) transparent;
+}
+#roczniki::-webkit-scrollbar,
+#track-list::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+#roczniki::-webkit-scrollbar-thumb,
+#track-list::-webkit-scrollbar-thumb {
+  background: var(--bg4);
+  border-radius: 3px;
+}
+#roczniki::-webkit-scrollbar-track,
+#track-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .rocznik-btn {
@@ -429,28 +440,164 @@ dialog#dlg-reset menu {
   font-weight: 600;
 }
 
+/* mobile: Roczniki jako jeden poziomy pasek przewijalny (FLAT/METRO) —
+   zawijanie w wiele rzędów zabierało listie plików pół ekranu.
+   WAŻNE: ten blok musi być PO bazowych regułach #roczniki/.rocznik-btn,
+   inaczej `flex-direction: column` z reguły bazowej wygra specificity. */
+@media (max-width: 767px) {
+  #library-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  #roczniki {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 6px var(--pad);
+  }
+  .rocznik-btn {
+    flex: none;
+    white-space: nowrap;
+    padding: 6px 12px;
+  }
+}
+
 .rocznik-btn:focus-visible {
   outline: 2px solid var(--acc);
   outline-offset: -2px;
 }
 
+
+/* ── lista: nagłówek kolumn sortowalnych + wiersze na wspólnej siatce ── */
+
+#list-wrapper {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+#list-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px 70px 90px;
+  gap: 12px;
+  padding: 6px 16px;
+  align-items: center;
+  flex: none;
+  position: sticky;
+  top: 0;
+  background: var(--bg2);
+  z-index: 2;
+}
+
+.col-sort {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: var(--tx2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: right;
+  padding: 4px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.col-sort:first-child {
+  text-align: left;
+}
+
+.col-sort:hover {
+  background: var(--bg3);
+  color: var(--tx);
+}
+
+.col-sort.active {
+  color: var(--acc);
+  font-weight: 600;
+}
+
+.col-sort:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+
+.sort-arrow {
+  font-size: 11px;
+  margin-left: 3px;
+  letter-spacing: 0;
+}
+
 #track-list {
+  flex: 1;
+  /* kluczowe: scroll ma NIEZALEŻNIE listować plików, a sidebar Roczników
+     zostaje zawsze widoczny — dlatego track-list scrolluje sam,
+     nie cały viewport (bilet 12: fix scroll view) */
   overflow-y: auto;
   overscroll-behavior: contain;
   min-height: 0;
   position: relative;
 }
 
+/* fokus strzałkami = dopełnienie tłem (bilet 12, §5c) */
+.track-row:focus {
+  background: var(--bg4);
+}
+
+.track-row:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+
+/* kolumny BPM / Słuchane znikają na wąskich ekranach (mobile-first) */
+@media (max-width: 767px) {
+  #list-header,
+  .track-row {
+    grid-template-columns: minmax(0, 1fr) 110px;
+  }
+  .col-tempo,
+  .col-played {
+    display: none;
+  }
+}
+
+/* ── wiersze listy: siatka wspólna z nagłówkiem ─────────────── */
+
 .track-row {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px 70px 90px;
   gap: 12px;
+  align-items: center;
   padding: 0 16px;
   font-size: 14px;
+  background: var(--zebra);
+}
+
+.track-row:nth-child(even) {
+  background: var(--bg2);
+}
+
+/* Stany interaktywne MUSZĄ być PO regułach zebry — ta sama specyficzność
+   (0,2,0), decyduje kolejność źródłowa. Bez tego podświetlenie .sel
+   (aktualnie słuchany utwór) nie działa na parzystym (jaśniejszym) tle. */
+.track-row:hover {
+  background: var(--bg4);
+}
+
+.track-row:focus {
+  background: var(--bg4);
+}
+
+.track-row.sel {
+  background: var(--acc-sel);
 }
 
 .row-name {
-  flex: 1;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -460,23 +607,25 @@ dialog#dlg-reset menu {
 .row-stars {
   color: var(--tx2);
   letter-spacing: 2px;
-  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
-/* Placeholder gwiazdek przed odczytem tagów / bez oceny (bilet #7, §2b): */
 .row-stars.pending {
   opacity: 0.35;
 }
 
-/* ⏳ „jeszcze nie zapisane" (bilet #9): obok gwiazdek w wierszu i w playerze. */
-.pending-mark {
-  font-size: 11px;
-  line-height: 1;
-  margin-left: 4px;
-  letter-spacing: 0;
+.row-bpm,
+.row-badge,
+.row-last {
+  flex: none;
+  min-width: 56px;
+  text-align: right;
+  color: var(--tx2);
 }
 
-/* Gwiazdki oceny (bilet #8): pięć przycisków bez ramek, FLAT/METRO. */
 .star-rating {
   display: inline-flex;
   align-items: center;
@@ -510,10 +659,10 @@ dialog#dlg-reset menu {
   outline-offset: 1px;
 }
 
-.row-bpm,
-.row-badge {
-  flex: none;
-  min-width: 56px;
-  text-align: right;
-  color: var(--tx2);
+/* ⏳ „jeszcze nie zapisane" (bilet #9): obok gwiazdek w wierszu i w playerze. */
+.pending-mark {
+  font-size: 11px;
+  line-height: 1;
+  margin-left: 4px;
+  letter-spacing: 0;
 }

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { openDB as openAppDB, STORES } from "../store/db.js";
 import { mountLibraryView, unmountLibraryView } from "./library-view.js";
-import { get } from "../store/db.js";
+import { get, put } from "../store/db.js";
 
 const FOLDERS = [
   { folderid: 1, name: "Muzyka" },
@@ -594,6 +594,104 @@ describe("mountLibraryView — kolejka ocen i ⏳ (bilet 09)", () => {
     expect(await listPendingRatings(db)).toEqual([]);
     await waitFor(() => pendingMark("pcloud|900")?.hidden === true);
     expect(api.getRating("pcloud|900")).toBe(4);
+    restoreHeight.mockRestore();
+  });
+});
+
+// ── Bilet 12: sort, szukajka, strzałki + Enter, „→ ☆” — ────────────────────
+
+function setupToolbar() {
+  document.getElementById("toolbar").innerHTML = `<input id="q" type="search" />`;
+}
+
+describe("mountLibraryView — sort + szukajka (bilet 12)", () => {
+  let restoreHeight;
+  let played;
+
+  beforeEach(async () => {
+    restoreHeight = stubListHeight();
+    setupToolbar();
+    await seedCache(db);
+    played = [];
+    await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+      onPlay: (t, opts) => played.push({ t, opts }),
+    });
+  });
+
+  afterEach(() => {
+    restoreHeight.mockRestore();
+  });
+
+  it("szukajka zawęża listę i aktualizuje licznik", async () => {
+    const q = document.getElementById("q");
+    q.value = "t.mp3";
+    q.dispatchEvent(new Event("input", { bubbles: true }));
+    // debounce ~200 ms
+    await new Promise((r) => setTimeout(r, 400));
+    const rows = [...document.querySelectorAll(".track-row")];
+    expect(rows.map((r) => r.dataset.key)).toEqual(["pcloud|900"]);
+    expect(document.getElementById("count").textContent).toContain("1 pozycji");
+  });
+
+  it("klik w kolumnę Nazwa przełącza kierunek sortowania", async () => {
+    const nameHeader = [...document.querySelectorAll("#list-header .col-sort")].find((btn) =>
+      btn.textContent.startsWith("Nazwa"),
+    );
+    expect(nameHeader).toBeTruthy();
+    // kolejny klik na aktywnej kolumnie przełącza kierunek
+    nameHeader.click();
+    await new Promise((r) => setTimeout(r, 50));
+    const rows = [...document.querySelectorAll(".track-row")];
+    expect(rows.map((r) => r.dataset.key)).toEqual(["pcloud|901", "pcloud|900"]);
+    expect(nameHeader.querySelector(".sort-arrow").textContent).toBe("↓");
+  });
+
+  it("klik w rating-desc sortuje po ocenie", async () => {
+    // nadaj oceny przez klik w gwiazdkę w wierszu (optimistic → mapa ratings)
+    const row900 = document.querySelector('.track-row[data-key="pcloud|900"]');
+    row900.querySelector('.star-btn[data-star="1"]').click();
+    const row901 = document.querySelector('.track-row[data-key="pcloud|901"]');
+    row901.querySelector('.star-btn[data-star="5"]').click();
+
+    const ratingHeader = [...document.querySelectorAll("#list-header .col-sort")].find((btn) =>
+      btn.textContent.startsWith("Ocena"),
+    );
+    ratingHeader.click();
+    await new Promise((r) => setTimeout(r, 50));
+    const rows = [...document.querySelectorAll(".track-row")];
+    expect(rows.map((r) => r.dataset.key)).toEqual(["pcloud|901", "pcloud|900"]);
+    expect(ratingHeader.querySelector(".sort-arrow").textContent).toBe("↓");
+  });
+
+  it("licznik „bez oceny” aktualizuje się po ocenie", async () => {
+    const row = document.querySelector('.track-row[data-key="pcloud|900"]');
+    row.querySelector('.star-btn[data-star="3"]').click();
+    await waitFor(() => document.getElementById("count").textContent === "2 pozycji … 1 bez oceny");
+    expect(document.getElementById("count").textContent).toContain("1 bez oceny");
+  });
+});
+
+describe("mountLibraryView — „→ ☆” (bilet 12)", () => {
+  it("playNextUnrated skacze do następnego nieocenionego na bieżącej liście i odtwarza", async () => {
+    const restoreHeight = stubListHeight();
+    setupToolbar();
+    await seedCache(db);
+    const played = [];
+    const api = await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+      onPlay: (t) => played.push(t),
+    });
+
+    // Bez selection: pierwszy nieoceniony
+    expect(api.playNextUnrated()).toBe(true);
+    expect(played[0]?.key).toBe("pcloud|900");
     restoreHeight.mockRestore();
   });
 });

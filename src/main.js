@@ -93,6 +93,7 @@ async function boot() {
               onRate: (track, stars) => {
                 libraryApi?.rate(track.key, /** @type {1|2|3|4|5} */ (stars));
               },
+              onNextUnrated: () => libraryApi?.playNextUnrated?.() ?? false,
             })
           : null;
       mountedPlayer = player;

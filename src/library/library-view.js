@@ -3,9 +3,9 @@
 // windowed lista (bilet: ~30 rzędów, rAF, 60 FPS). Row: nazwa + placeholder
 // gwiazdek + BPM slot + badge slot.
 
-import { filterByRocznik } from "./listing.js";
+import { countUnrated, filterByRocznik } from "./listing.js";
 import { WindowedList, ROW_HEIGHT } from "./windowing.js";
-import { loadLibraryOrFetch, loadRatings, makeCounter } from "./library-controller.js";
+import { loadLibraryOrFetch, loadRatings } from "./library-controller.js";
 import { loadLibrary, deleteLibrary } from "./library-cache.js";
 import { createRootPicker } from "./root-picker.js";
 import { createTagReadController } from "./tag-read-controller.js";
@@ -14,8 +14,17 @@ import { createStarControl, setPendingDisplay, setStarDisplay } from "../ratings
 import { listPendingRatings, pendingRatingStars } from "../ratings/pending-ratings.js";
 import { isEditableTarget } from "../ui/keyboard.js";
 import { HEAD_BATCH_CAP } from "../api/proxy-batch.js";
-import { get, put, putMany, STORES } from "../store/db.js";
+import { get, put, putMany, saveSetting, STORES } from "../store/db.js";
 import { loadSession } from "../player/player-state.js";
+import {
+  DEFAULT_SORT_MODE,
+  isSortMode,
+  nextUnrated,
+  searchFilter,
+  SORT_COLUMNS,
+  sortTracks,
+  toggleSortMode,
+} from "./filter-sort.js";
 
 /** Widok biblioteki zamontowany. */
 let mounted = false;
@@ -28,6 +37,12 @@ let tagControllerRef = /** @type {ReturnType<typeof createTagReadController> | n
 
 /** Listener skrótów 1–5/0 (sprzątany przy unmount). */
 let ratingKeyHandlerRef = /** @type {((e: KeyboardEvent) => void) | null} */ (null);
+
+/** Timer szukajki (bilet 12; sprzątany przy unmount). */
+let searchDebounceRef = /** @type {any} */ (null);
+
+/** Handler scrolla kółkiem nad paskiem Roczników (sprzątany przy unmount). */
+let rocznikWheelRef = /** @type {any} */ (null);
 
 /** Timer komunikatu o nieudanym zapisie. */
 let ratingNoteTimer = /** @type {any} */ (null);
@@ -443,11 +458,36 @@ export async function mountLibraryView({
   sidebar.id = "roczniki";
   sidebar.setAttribute("aria-label", "Years");
 
+  // Scroll kółkiem myszy nad poziomym paskiem Roczników (mobile) –
+  // przekształcamy pionowy obrót kółka w poziomy scroll (bilet 12).
+  const rocznikWheel = (e) => {
+    if (e.deltaY === 0) return;
+    // Przechwytujemy tylko gdy pasek faktycznie przewija się w poziomie.
+    if (sidebar.scrollWidth <= sidebar.clientWidth) return;
+    const atStart = sidebar.scrollLeft <= 0;
+    const atEnd = sidebar.scrollLeft >= sidebar.scrollWidth - sidebar.clientWidth - 1;
+    const dir = e.deltaY > 0 ? 1 : -1;
+    // Na krańcach paska umożliwimy zdarzenie przejść dalej (np. na listę plików).
+    if ((dir > 0 && atEnd) || (dir < 0 && atStart)) return;
+    e.preventDefault();
+    sidebar.scrollLeft += e.deltaY;
+  };
+  sidebar.addEventListener("wheel", rocznikWheel, { passive: false });
+  rocznikWheelRef = { el: sidebar, fn: rocznikWheel };
+
   const listViewport = document.createElement("div");
   listViewport.id = "track-list";
   listViewport.tabIndex = 0;
 
-  layout.append(sidebar, listViewport);
+  // Nagłówek kolumn sortowalnych nad listą (bilet 12, §5d): klik = sort.
+  const listHeader = document.createElement("div");
+  listHeader.id = "list-header";
+
+  const listWrapper = document.createElement("div");
+  listWrapper.id = "list-wrapper";
+  listWrapper.append(listHeader, listViewport);
+
+  layout.append(sidebar, listWrapper);
   const viewportHost = document.getElementById("viewport");
   viewportHost?.append(layout);
   viewportHost?.classList.add("viewport-library");
@@ -478,12 +518,83 @@ export async function mountLibraryView({
     passive: true,
   });
 
+  // ── strzałki + Enter na liście (bilet 12, spec §5c) ────────────
+  /** Aktualny indeks wiersza w fokusie (klawiatura); null = brak fokusu. */
+  let focusIndex = /** @type {number | null} */ (null);
+
+  listViewport.addEventListener("keydown", (e) => {
+    if (isEditableTarget(e)) return;
+    const N = filtered.length;
+    if (!N) return;
+    const k = e.key;
+    if (k !== "ArrowDown" && k !== "ArrowUp" && k !== "Home" && k !== "End" && k !== "Enter")
+      return;
+    e.preventDefault();
+    let i = focusIndex;
+    if (i == null) {
+      const si = filtered.findIndex((t) => t.key === selectedKey);
+      i = si >= 0 ? si : 0;
+    }
+    if (k === "ArrowDown") i = Math.min(N - 1, i + 1);
+    else if (k === "ArrowUp") i = Math.max(0, i - 1);
+    else if (k === "Home") i = 0;
+    else if (k === "End") i = N - 1;
+    focusIndex = i;
+    focusRowByIndex(i);
+    if (k === "Enter") selectTrack(filtered[i]);
+  });
+
+  /** Fokusuje (i scrolluje do) wiersz o indeksie `i` na liście. */
+  function focusRowByIndex(i) {
+    const key = filtered[i]?.key;
+    if (!key) return;
+    let el = listViewport.querySelector(`.track-row[data-key="${key}"]`);
+    if (!el) {
+      // wiersz poza oknem windowingu — najpierw scroll
+      const vpH = listViewport.clientHeight || 1;
+      listViewport.scrollTop = Math.max(0, i * ROW_HEIGHT - vpH / 2 + ROW_HEIGHT / 2);
+      list.update();
+      el = listViewport.querySelector(`.track-row[data-key="${key}"]`);
+    }
+    if (el) {
+      el.focus();
+      const vpH = listViewport.clientHeight || 1;
+      const top = i * ROW_HEIGHT;
+      const bottom = top + ROW_HEIGHT;
+      if (top < listViewport.scrollTop || bottom > listViewport.scrollTop + vpH) {
+        listViewport.scrollTop = Math.max(0, top - vpH / 2 + ROW_HEIGHT / 2);
+        list.update();
+      }
+    }
+  }
+
   /** Tracki jeszcze nie przeczytane (status != done) — do idle kolejki. */
   function restForBackfill() {
     return filtered.filter((t) => {
       const rec = ratings.get(t.key);
       return !(rec && rec.tagsReadAt != null);
     });
+  }
+
+  /**
+   * Formatuje znacznik czasu na krótki opis względny („5 min”, „3 dni”).
+   * @param {number | null | undefined} ts — ms epoch albo null/undefined
+   */
+  function relativeTime(ts) {
+    if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return "";
+    const diff = Date.now() - ts;
+    if (diff < 60000) return "teraz";
+    const min = Math.floor(diff / 60000);
+    if (min < 60) return `${min} min`;
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24) return `${hrs} godz.`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `${days} dni`;
+    const wks = Math.floor(days / 7);
+    if (wks < 5) return `${wks} tyg.`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months} mies.`;
+    return `${Math.floor(days / 365)} lat`;
   }
 
   /** Aktualnie zaznaczony Utwór (podświetlenie `.sel` na liście). */
@@ -494,25 +605,29 @@ export async function mountLibraryView({
     row.className = "list-row track-row";
     if (track.key === selectedKey) row.classList.add("sel");
     row.dataset.key = track.key;
+    // wiersz focusowalny programowo (strzałki na liście, §5c)
+    row.tabIndex = -1;
 
     const name = document.createElement("span");
-    name.className = "row-name";
+    name.className = "row-name col-name";
     name.textContent = track.name;
     name.title = track.name;
 
     const stars = createStarControl({ onRate: (n) => rateKey(track.key, n) }).element;
+    stars.classList.add("col-rating");
     applyRowStars(stars, track.key);
 
     const bpm = document.createElement("span");
-    bpm.className = "row-bpm slot";
+    bpm.className = "row-bpm slot col-tempo";
 
-    const badge = document.createElement("span");
-    badge.className = "row-badge slot";
+    const lastPlayed = document.createElement("span");
+    lastPlayed.className = "row-last slot col-played";
+    lastPlayed.textContent = relativeTime(ratings.get(track.key)?.lastPlayed);
 
     // Klik/tap wiersza wybiera Utwór i od razu odtwarza (bilet 06).
     row.addEventListener("click", () => selectTrack(track));
 
-    row.append(name, stars, bpm, badge);
+    row.append(name, stars, bpm, lastPlayed);
     return row;
   }
 
@@ -547,8 +662,33 @@ export async function mountLibraryView({
    */
   function selectTrack(track, playOpts) {
     selectedKey = track.key;
+    focusIndex = Math.max(
+      0,
+      filtered.findIndex((t) => t.key === track.key),
+    );
     updateSelectionClasses();
     if (onPlay) onPlay(track, playOpts);
+    touchLastPlayed(track.key);
+  }
+
+  /**
+   * Play zaczął się dla `key` → odśwież lastPlayed w mapie rekordów i (dla
+   * sorta „recent”) przenieś Utwór na górę.
+   */
+  function touchLastPlayed(key) {
+    const rec = ratings.get(key);
+    if (rec) rec.lastPlayed = Date.now();
+    refreshRowLastPlayed(key);
+    if (["recent", "recent-desc", "recent-asc"].includes(sortMode)) update();
+  }
+
+  /** Odświeża komórkę „Słuchane” widocznego wiersza po zmianie lastPlayed. */
+  function refreshRowLastPlayed(key) {
+    for (const el of listViewport.querySelectorAll(".track-row")) {
+      if (el.dataset.key !== key) continue;
+      const cell = el.querySelector(".row-last");
+      if (cell) cell.textContent = relativeTime(ratings.get(key)?.lastPlayed);
+    }
   }
 
   /**
@@ -602,6 +742,28 @@ export async function mountLibraryView({
 
   let filtered = /** @type {import("./listing.js").LibraryTrack[]} */ (library.tracks);
 
+  // ── sort/szukajka (bilet 12, spec §5d/§5e) ────────────────────
+  /** Aktualny tryb sortowania (name-asc default, §5d). */
+  let sortMode = DEFAULT_SORT_MODE;
+  /** Treść szukajki (substring po nazwie pliku, §5e). */
+  let searchQuery = "";
+  /** Debounce szukajki (~200 ms). */
+  let searchDebounce = /** @type {any} */ (null);
+
+  // Zapamiętane per urządzenie ustawienia paska (store `settings`, spec §4a).
+  const savedBar = (await get(db, STORES.SETTINGS, "library-bar").catch(() => null)) ?? null;
+  if (savedBar) {
+    // legacy „recent" z wcześniejszych sesji → „recent-desc"
+    const saved = savedBar.sort === "recent" ? "recent-desc" : savedBar.sort;
+    if (isSortMode(saved)) sortMode = saved;
+    if (typeof savedBar.search === "string") searchQuery = savedBar.search;
+  }
+
+  /** Zapisuje sort + szukajkę per urządzenie (store `settings`). */
+  function persistBar() {
+    saveSetting(db, "library-bar", { sort: sortMode, search: searchQuery }).catch(() => {});
+  }
+
   /**
    * Synchronizacja player → lista (bilet 06): podświetla wiersz key (i dociąga
    * go do widoku). Gdy Utwór jest poza aktywnym filtrem Rocznika — reset filtra
@@ -634,11 +796,13 @@ export async function mountLibraryView({
   }
 
   function filteredTracks() {
-    return filterByRocznik(library.tracks, rocznik);
+    const byRocznik = filterByRocznik(library.tracks, rocznik);
+    return searchFilter(byRocznik, searchQuery);
   }
 
   function updateCounter() {
-    count.textContent = makeCounter({ library, rocznik, ratings }).label;
+    const unrated = countUnrated(filtered, ratings);
+    count.textContent = `${filtered.length} pozycji … ${unrated} bez oceny`;
   }
 
   function renderSidebar() {
@@ -669,10 +833,49 @@ export async function mountLibraryView({
     }
   }
 
+  /** Nagłówki kolumn sortowalnych (§5d): klik = sort po kolumnie. */
+  function renderHeader() {
+    listHeader.innerHTML = "";
+    for (const col of SORT_COLUMNS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `col-sort col-${col.id}`;
+      btn.dataset.col = col.id;
+      btn.textContent = col.label;
+      const arrow = document.createElement("span");
+      arrow.className = "sort-arrow";
+      btn.append(arrow);
+      btn.addEventListener("click", () => {
+        // klik w nieaktywną kolumnę → domyślny kierunek; w aktywną → toggle
+        const active = col.modes.includes(sortMode);
+        sortMode = active ? toggleSortMode(sortMode) : col.modes[0];
+        persistBar();
+        update();
+      });
+      listHeader.append(btn);
+    }
+  }
+
+  /** Odświeża strzałki i aria-sort w nagłówkach po zmianie sortMode. */
+  function updateHeader() {
+    for (const btn of listHeader.querySelectorAll(".col-sort")) {
+      const col = SORT_COLUMNS.find((c) => c.id === btn.dataset.col);
+      const active = col.modes.includes(sortMode);
+      const dir = sortMode.endsWith("-asc") ? "↑" : "↓";
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-sort", active ? (dir === "↑" ? "ascending" : "descending") : "none");
+      const arrow = btn.querySelector(".sort-arrow");
+      if (arrow) arrow.textContent = active ? dir : "";
+    }
+  }
+
+
   function update() {
-    filtered = filteredTracks();
+    filtered = sortTracks(filteredTracks(), sortMode, ratings);
+    focusIndex = null; // sort/szukajka przestawiły listę — fokus klawiatury resetujemy
     list.setRows(filtered.length);
     updateCounter();
+    updateHeader();
     onPlaylist?.(filtered);
 
     // hierarchia tłem: aktywny Rocznik pełnym tłem
@@ -753,10 +956,26 @@ export async function mountLibraryView({
     } finally {
       if (mounted) chip.disabled = false;
     }
-  });
+  })
 
   renderSidebar();
+  renderHeader();
   update();
+
+  const searchInput = document.getElementById("q");
+  if (searchInput) {
+    searchInput.value = searchQuery;
+    searchInput.disabled = false;
+    searchInput.addEventListener("input", () => {
+      if (searchDebounce) clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => {
+        searchQuery = searchInput.value;
+        persistBar();
+        update();
+      }, 200);
+      searchDebounceRef = searchDebounce;
+    });
+  }
 
   // ── Pełny powrót sesji (bilet 06): store `session` → ostatni Utwór + pozycja.
   // Degradacja: Utwór zniknął z biblioteki → tylko zaznaczenie listy (pierwszy
@@ -786,6 +1005,14 @@ export async function mountLibraryView({
   flushGlobalRef = flush;
   void flush().catch(() => {});
 
+  /** Następny nieoceniony Utwór na bieżącej liście („→ ☆”/`U`, spec §5b). */
+  function playNextUnrated() {
+    const next = nextUnrated(filtered, ratings, selectedKey);
+    if (!next) return false;
+    selectTrack(next);
+    return true;
+  }
+
   return {
     selectKey, // sync player → lista (transport N/P, bilet 06)
     /** Ocena Utworu z playera/skrótów (optimistic, bilet #8). */
@@ -796,6 +1023,8 @@ export async function mountLibraryView({
     isPending,
     /** Flush `pending-ratings` (bilet #9). */
     flush,
+    /** Skok do następnego nieocenionego na bieżącej liście (→ ☆/U). */
+    playNextUnrated,
   };
 }
 
@@ -807,6 +1036,12 @@ export function unmountLibraryView() {
   ratingKeyHandlerRef = null;
   if (ratingNoteTimer) clearTimeout(ratingNoteTimer);
   ratingNoteTimer = null;
+  if (searchDebounceRef) clearTimeout(searchDebounceRef);
+  searchDebounceRef = null;
+  if (rocznikWheelRef) {
+    rocznikWheelRef.el.removeEventListener("wheel", rocznikWheelRef.fn);
+    rocznikWheelRef = null;
+  }
   if (flushGlobalRef && /** @type {any} */ (globalThis).flush === flushGlobalRef) {
     delete (/** @type {any} */ (globalThis).flush);
   }
