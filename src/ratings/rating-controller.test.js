@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { openDB, get, put, STORES } from "../store/db.js";
 import { createRatingController } from "./rating-controller.js";
-import { listPendingRatings } from "./pending-ratings.js";
+import { enqueuePendingRating, listPendingRatings } from "./pending-ratings.js";
 
 const WMP_OWNER = "Windows Media Player 9 Series";
 const SOURCE = "pcloud";
@@ -85,6 +85,34 @@ function wmpByte(bytes) {
   return null;
 }
 
+/** Wartość TXXX `bpm` z bufora (null = brak ramki) — niezależny reader uploadu. */
+function bpmValue(bytes) {
+  const size =
+    ((bytes[6] & 0x7f) << 21) |
+    ((bytes[7] & 0x7f) << 14) |
+    ((bytes[8] & 0x7f) << 7) |
+    (bytes[9] & 0x7f);
+  let p = 10;
+  while (p + 10 <= 10 + size) {
+    const id = String.fromCharCode(...bytes.subarray(p, p + 4));
+    if (!/^[A-Z0-9]{4}$/.test(id)) break;
+    const len =
+      ((bytes[p + 4] << 24) | (bytes[p + 5] << 16) | (bytes[p + 6] << 8) | bytes[p + 7]) >>> 0;
+    if (id === "TXXX") {
+      const body = bytes.subarray(p + 10, p + 10 + len);
+      const z = body.indexOf(0, 1);
+      const desc = String.fromCharCode(...body.subarray(1, z));
+      if (desc.toLowerCase() === "bpm") {
+        const end = body.indexOf(0, z + 1);
+        const text = String.fromCharCode(...body.subarray(z + 1, end < 0 ? undefined : end));
+        return Number(text);
+      }
+    }
+    p += 10 + len;
+  }
+  return null;
+}
+
 function makeTrack(overrides = {}) {
   return {
     key: "pcloud|7",
@@ -115,6 +143,7 @@ function makeController({
     modified: 20,
   }),
   onChange,
+  onBpmChange,
   now = () => 1234,
 } = {}) {
   const cache = /** @type {Map<string, any>} */ (
@@ -127,6 +156,7 @@ function makeController({
     ])
   );
   const changes = [];
+  const bpmChanges = [];
   const controller = createRatingController({
     db,
     token: "tok",
@@ -137,12 +167,16 @@ function makeController({
       changes.push({ key, ...state });
       onChange?.(key, state);
     },
+    onBpmChange: (key, state) => {
+      bpmChanges.push({ key, ...state });
+      onBpmChange?.(key, state);
+    },
     fetchBytes,
     statFile,
     upload,
     now,
   });
-  return { controller, ratings: cache, changes, track };
+  return { controller, ratings: cache, changes, bpmChanges, track };
 }
 
 describe("optimistic UI", () => {
@@ -634,5 +668,122 @@ describe("flush pending-ratings (bilet #9)", () => {
 
     expect(h.uploads.map((u) => u.filename)).toEqual(["a.mp3", "b.mp3"]);
     expect(await listPendingRatings(db)).toEqual([]);
+  });
+});
+
+describe("TAP tempo — zapis BPM (bilet 13)", () => {
+  it("setBpm optymistycznie ustawia BPM i woła onBpmChange przed fetchem", async () => {
+    let fetchCalls = 0;
+    const { controller, ratings, bpmChanges } = makeController({
+      ratings: new Map([["pcloud|7", { rating: 3, bpm: null, tagsReadAt: 1 }]]),
+      fetchBytes: async () => {
+        fetchCalls++;
+        return mp3WithRating(3);
+      },
+    });
+    controller.setBpm(makeTrack(), 128);
+    expect(ratings.get("pcloud|7").bpm).toBe(128);
+    expect(bpmChanges[0]).toMatchObject({ key: "pcloud|7", bpm: 128, pending: true });
+    expect(fetchCalls).toBe(0);
+    await controller.whenIdle();
+    expect(bpmChanges.at(-1)).toMatchObject({ bpm: 128, pending: false });
+  });
+
+  it("upload niesie TXXX bpm, zachowuje POPM i aktualizuje cache + Fingerprint", async () => {
+    const uploads = [];
+    const { controller, ratings, track } = makeController({
+      ratings: new Map([["pcloud|7", { rating: 3, ratingSource: "WMP", bpm: null }]]),
+      upload: async ({ bytes }) => {
+        uploads.push(bytes);
+        return { fileid: track.fileid, name: track.name, size: bytes.length, modified: 20 };
+      },
+    });
+    controller.setBpm(track, 128);
+    await controller.whenIdle();
+
+    expect(uploads).toHaveLength(1);
+    expect(bpmValue(uploads[0])).toBe(128);
+    expect(wmpByte(uploads[0])).toBe(128); // 3★ nietknięte
+    const rec = await get(db, STORES.TRACKS, "pcloud|7");
+    expect(rec).toMatchObject({ bpm: 128, rating: 3, ratingSource: "WMP" });
+    expect(rec.fingerprint).toEqual({ size: uploads[0].length, modified: 20 });
+    expect(ratings.get("pcloud|7").bpm).toBe(128);
+  });
+
+  it("awaria trwała wycofuje BPM do ostatniego potwierdzonego stanu", async () => {
+    const { controller, ratings, bpmChanges } = makeController({
+      ratings: new Map([["pcloud|7", { rating: 3, bpm: 100 }]]),
+      fetchBytes: async () => {
+        throw new Error("no such file");
+      },
+    });
+    controller.setBpm(makeTrack(), 140);
+    await controller.whenIdle();
+
+    expect(ratings.get("pcloud|7").bpm).toBe(100);
+    const last = bpmChanges.at(-1);
+    expect(last).toMatchObject({ bpm: 100, pending: false });
+    expect(last.error).toBeInstanceOf(Error);
+  });
+
+  it("odrzuca BPM niecałkowite lub <= 0", () => {
+    const { controller } = makeController();
+    expect(() => controller.setBpm(makeTrack(), 0)).toThrow(RangeError);
+    expect(() => controller.setBpm(makeTrack(), 120.5)).toThrow(RangeError);
+  });
+});
+
+describe("TAP tempo — BPM nie kłóci się z kolejką ocen (bilet 13)", () => {
+  it("zapis BPM zachowuje poczekującą ocenę i jej ⏳ (pendingUpload)", async () => {
+    const { controller, track } = makeController({
+      ratings: new Map([
+        ["pcloud|7", { rating: 5, ratingSource: "WMP", bpm: null, pendingUpload: true }],
+      ]),
+    });
+    await put(db, STORES.TRACKS, "pcloud|7", {
+      rating: 5,
+      ratingSource: "WMP",
+      bpm: null,
+      pendingUpload: true,
+    });
+    controller.setBpm(track, 100);
+    await controller.whenIdle();
+    const rec = await get(db, STORES.TRACKS, "pcloud|7");
+    expect(rec.bpm).toBe(100);
+    expect(rec.rating).toBe(5); // plik ma 3★ — poczekująca ocena ma pierwszeństwo
+    expect(rec.pendingUpload).toBe(true);
+  });
+});
+
+describe("TAP tempo — Fingerprint kolejki po zapisie BPM (bilet 13)", () => {
+  it("zapis BPM odświeża Fingerprint poczekującej oceny (nie unieważnia jej)", async () => {
+    const track = makeTrack();
+    await enqueuePendingRating(db, {
+      key: track.key,
+      fingerprint: { size: 100, modified: 10 },
+      ratingByte: 255,
+      action: "set",
+      createdAt: 1,
+    });
+    const { controller } = makeController({
+      track,
+      ratings: new Map([["pcloud|7", { rating: 5, pendingUpload: true }]]),
+      upload: async ({ bytes }) => ({
+        fileid: track.fileid,
+        name: track.name,
+        size: bytes.length,
+        modified: 20,
+      }),
+    });
+    await put(db, STORES.TRACKS, track.key, {
+      rating: 5,
+      pendingUpload: true,
+      fingerprint: { size: 100, modified: 10 },
+    });
+    controller.setBpm(track, 90);
+    await controller.whenIdle();
+    const [pending] = await listPendingRatings(db);
+    expect(pending.fingerprint).toEqual({ size: expect.any(Number), modified: 20 });
+    expect(pending.ratingByte).toBe(255);
   });
 });

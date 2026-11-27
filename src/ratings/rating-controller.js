@@ -13,7 +13,8 @@ import { pcloudApi, uploadFileOverwrite } from "../auth/pcloud-api.js";
 import { PCLOUD_SOURCE_KEY } from "../auth/token-store.js";
 import { get, put, putMany, STORES } from "../store/db.js";
 import { loadLibrary } from "../library/library-cache.js";
-import { rewriteId3Rating, starsToByte } from "../tags/id3-writer.js";
+import { rewriteId3Rating, rewriteId3Tags, starsToByte } from "../tags/id3-writer.js";
+import { isValidBpm } from "../tags/bpm-value.js";
 import {
   enqueuePendingRating,
   listPendingRatings,
@@ -74,6 +75,7 @@ let uploadTail = Promise.resolve();
  * @property {import("../library/listing.js").LibraryTrack[]} tracks — obiekty biblioteki (mutowane Fingerprintem)
  * @property {Map<string, any>} ratings — cache w pamięci (trackKey → rekord)
  * @property {(key: string, state: { rating: number | null, pending: boolean, error?: Error }) => void} onChange
+ * @property {(key: string, state: { bpm: number | null, pending: boolean, error?: Error }) => void} [onBpmChange]
  * @property {(opts: { token: string, hostname?: string, fileid: number }) => Promise<Uint8Array>} [fetchBytes]
  * @property {(opts: { token: string, hostname?: string, fileid: number }) => Promise<any>} [statFile]
  * @property {(opts: any) => Promise<{ fileid: number, name?: string, size: number, modified: number }>} [upload]
@@ -109,6 +111,7 @@ export function createRatingController({
   tracks,
   ratings,
   onChange,
+  onBpmChange,
   fetchBytes = defaultFetchBytes,
   statFile = defaultStatFile,
   upload = uploadFileOverwrite,
@@ -120,6 +123,8 @@ export function createRatingController({
   const confirmed = new Map();
   /** Wersja kliknięcia — starszy upload nie nadpisuje nowszego UI. @type {Map<string, number>} */
   const versions = new Map();
+  /** To samo dla zapisu BPM — ocena i tempo nie wycinają sobie potwierdzeń. */
+  const bpmVersions = new Map();
 
   let outstanding = 0;
   /** @type {Array<() => void>} */
@@ -162,6 +167,38 @@ export function createRatingController({
   }
 
   /**
+   * Wspólny przepływ zapisu tagu (ocena i BPM): pobranie bajtów przez READ-PROXY
+   * → rewrite → uploadfile overwrite → cache `tracks` z nowym Fingerprintem.
+   * @param {import("../library/listing.js").LibraryTrack} track
+   * @param {(bytes: Uint8Array) => { bytes: Uint8Array }} rewrite
+   * @param {"rating" | "bpm"} kind
+   * @param {number} version
+   * @param {{ pendingUnchanged?: boolean }} [commitExtra]
+   */
+  async function writeAndCommit(track, rewrite, kind, version, commitExtra) {
+    const folderId = await folderIdFor(track);
+    const original = await fetchBytes({
+      token,
+      hostname,
+      fileid: Number(track.fileid),
+    });
+    const rewritten = rewrite(original);
+    const meta = await upload({
+      token,
+      hostname,
+      folderId,
+      filename: track.name,
+      bytes: rewritten.bytes,
+    });
+    if (Number(meta.fileid) !== Number(track.fileid)) {
+      throw new Error(
+        `${kind}: uploadfile returned fileid ${meta.fileid}, expected ${track.fileid}`,
+      );
+    }
+    await commit(track, rewritten, meta, { kind, version, ...commitExtra });
+  }
+
+  /**
    * Ustawia ocenę (1–5) albo usuwa ją (null). Zwraca natychmiast po aktualizacji
    * optimistic — praca (fetch + rewrite + upload) idzie w tle, po kolei.
    * @param {import("../library/listing.js").LibraryTrack | string} trackOrKey
@@ -186,26 +223,12 @@ export function createRatingController({
     enqueue(async () => {
       try {
         if (!track) throw new Error("rating: track not found in library");
-        const folderId = await folderIdFor(track);
-        const original = await fetchBytes({
-          token,
-          hostname,
-          fileid: Number(track.fileid),
-        });
-        const rewritten = rewriteId3Rating(original, { stars });
-        const meta = await upload({
-          token,
-          hostname,
-          folderId,
-          filename: track.name,
-          bytes: rewritten.bytes,
-        });
-        if (Number(meta.fileid) !== Number(track.fileid)) {
-          throw new Error(
-            `rating: uploadfile returned fileid ${meta.fileid}, expected ${track.fileid}`,
-          );
-        }
-        await commit(track, rewritten, meta, version);
+        await writeAndCommit(
+          track,
+          (bytes) => rewriteId3Rating(bytes, { stars }),
+          "rating",
+          version,
+        );
         // Potwierdzone online → ewentualna starsza pozycja kolejki jest nieaktualna.
         // Bezpieczne: kolejka jest serializowana, więc nowszy klik jeszcze nie zdążył
         // dopisać swojego rekordu.
@@ -220,6 +243,87 @@ export function createRatingController({
         }
       }
     });
+  }
+
+  /**
+   * Zapisuje BPM (int) do TXXX `bpm` tym samym przepływem co ocena: optimistic
+   * → bajty przez READ-PROXY → rewrite → uploadfile overwrite → cache `tracks`.
+   * BPM jest zapisem online (kolejka offline dotyczy ocen, bilet #9).
+   * @param {import("../library/listing.js").LibraryTrack | string} trackOrKey
+   * @param {number} bpm
+   */
+  function setBpm(trackOrKey, bpm) {
+    if (!isValidBpm(bpm)) {
+      throw new RangeError(`setBpm: invalid bpm ${bpm}`);
+    }
+    const key = typeof trackOrKey === "string" ? trackOrKey : trackOrKey.key;
+    const track = byKey.get(key) ?? (typeof trackOrKey === "string" ? null : trackOrKey);
+    const previous = typeof ratings.get(key)?.bpm === "number" ? ratings.get(key).bpm : null;
+
+    const version = (bpmVersions.get(key) ?? 0) + 1;
+    bpmVersions.set(key, version);
+
+    const prev = ratings.get(key) ?? {};
+    ratings.set(key, { ...prev, bpm });
+    onBpmChange?.(key, { bpm, pending: true });
+
+    enqueue(async () => {
+      try {
+        if (!track) throw new Error("bpm: track not found in library");
+        // Nasz zapis zmieni Fingerprint; poczekującą ocenę wolno przemapować
+        // tylko wtedy, gdy plik przed zapisem był jeszcze tym, który kolejkowano.
+        await writeAndCommit(track, (bytes) => rewriteId3Tags(bytes, { bpm }), "bpm", version, {
+          pendingUnchanged: await pendingRatingUnchanged(key, track),
+        });
+      } catch (err) {
+        await rollbackBpm(key, version, previous, /** @type {Error} */ (err));
+      }
+    });
+  }
+
+  /**
+   * Read-check kolejki przed własnym zapisem BPM: czy plik wciąż pasuje do
+   * Fingerprintu poczekującej oceny (jak w flushu).
+   * @param {string} key
+   * @param {import("../library/listing.js").LibraryTrack} track
+   * @returns {Promise<boolean>}
+   */
+  async function pendingRatingUnchanged(key, track) {
+    const pending = await get(db, STORES.PENDING_RATINGS, key);
+    if (!pending?.fingerprint) return true;
+    try {
+      const meta = await statFile({ token, hostname, fileid: Number(track.fileid) });
+      return !fingerprintDiverged(pending.fingerprint, meta);
+    } catch {
+      return false; // nie wiemy → nie przemapowujemy (flush zdecyduje)
+    }
+  }
+
+  /**
+   * Wycofanie optymistycznego BPM do ostatniego potwierdzonego rekordu.
+   * @param {string} key
+   * @param {number} version
+   * @param {number | null} fallback
+   * @param {Error} error
+   */
+  async function rollbackBpm(key, version, fallback, error) {
+    if (bpmVersions.get(key) !== version) return; // nowszy zapis przejmie UI
+    console.warn("[bpm] save failed", error);
+    try {
+      const record = await get(db, STORES.TRACKS, key);
+      const bpm = record && typeof record.bpm === "number" ? record.bpm : fallback;
+      if (record) ratings.set(key, record);
+      else {
+        const prev = ratings.get(key) ?? {};
+        ratings.set(key, { ...prev, bpm });
+      }
+      onBpmChange?.(key, { bpm, pending: false, error });
+    } catch (e) {
+      console.warn("[bpm] rollback failed", e);
+      const prev = ratings.get(key) ?? {};
+      ratings.set(key, { ...prev, bpm: fallback });
+      onBpmChange?.(key, { bpm: fallback, pending: false, error });
+    }
   }
 
   /**
@@ -262,11 +366,11 @@ export function createRatingController({
 
   /**
    * @param {import("../library/listing.js").LibraryTrack} track
-   * @param {{ rating: number | null, ratingSource: "WMP" | "max" | null }} rewritten
+   * @param {{ rating: number | null, ratingSource: "WMP" | "max" | null, bpm?: number | null }} rewritten
    * @param {{ size: number, modified: number }} meta
-   * @param {number} version
+   * @param {{ kind: "rating" | "bpm", version: number, pendingUnchanged?: boolean }} commitOpts
    */
-  async function commit(track, rewritten, meta, version) {
+  async function commit(track, rewritten, meta, { kind, version, pendingUnchanged = false }) {
     const key = track.key;
     const fingerprint = { size: meta.size, modified: meta.modified };
     track.size = fingerprint.size;
@@ -290,14 +394,42 @@ export function createRatingController({
       ratingSource: rewritten.ratingSource,
       tagsReadAt: now(),
     };
-    delete record.pendingUpload;
+    if (kind === "bpm") {
+      record.bpm = rewritten.bpm ?? null;
+      // Zapis BPM nie może zdjąć stanu kolejki oceny ani podmienić jej na
+      // wartość z pliku, którego nieobjęty nią jeszcze nie ma.
+      if (prevRecord.pendingUpload) {
+        record.rating = prevRecord.rating;
+        record.ratingSource = prevRecord.ratingSource;
+        record.pendingUpload = true;
+      }
+    } else {
+      // Świeżo pobrane bajty niosą aktualny BPM pliku (także zapisany chwilę
+      // wcześniej) — cache nie może zostać przy nieaktualnej wartości.
+      record.bpm = rewritten.bpm ?? null;
+      delete record.pendingUpload;
+    }
     /** @type {any[]} */
     const entries = [{ store: STORES.TRACKS, key, value: record }];
     if (library) entries.push({ store: STORES.LIBRARY, key: PCLOUD_SOURCE_KEY, value: library });
     await putMany(db, entries);
 
-    confirmed.set(key, rewritten.rating);
-    if (versions.get(key) === version) {
+    // Nasz własny zapis BPM zmienił Fingerprint pliku — poczekująca ocena nie
+    // może przez to zostać uznana za nieaktualną (to nie jest zmiana zewnętrzna).
+    if (kind === "bpm" && pendingUnchanged) {
+      const pending = await get(db, STORES.PENDING_RATINGS, key);
+      if (pending && pending.fingerprint) {
+        await put(db, STORES.PENDING_RATINGS, key, { ...pending, fingerprint });
+      }
+    }
+
+    if (kind === "rating") confirmed.set(key, rewritten.rating);
+    if (kind === "bpm") {
+      if (bpmVersions.get(key) === version) {
+        ratings.set(key, record);
+        onBpmChange?.(key, { bpm: record.bpm ?? null, pending: false });
+      }
+    } else if (versions.get(key) === version) {
       ratings.set(key, record);
       onChange(key, { rating: rewritten.rating, pending: false });
     }
@@ -415,7 +547,7 @@ export function createRatingController({
           `rating: uploadfile returned fileid ${meta.fileid}, expected ${track.fileid}`,
         );
       }
-      await commit(track, rewritten, meta, version);
+      await commit(track, rewritten, meta, { kind: "rating", version });
       await removePendingRating(db, key, { ifCreatedAt: rec.createdAt });
       return "flushed";
     } catch (err) {
@@ -454,6 +586,7 @@ export function createRatingController({
 
   return {
     rate,
+    setBpm,
     flush,
     /** Czeka aż kolejka uploadów się opróżni (testy, zamknięcie aplikacji). */
     whenIdle() {
