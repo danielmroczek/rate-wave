@@ -13,6 +13,7 @@ import { createRatingController, EMPTY_FLUSH_SUMMARY } from "../ratings/rating-c
 import { createStarControl, setPendingDisplay, setStarDisplay } from "../ratings/star-control.js";
 import { listPendingRatings, pendingRatingStars } from "../ratings/pending-ratings.js";
 import { isEditableTarget } from "../ui/keyboard.js";
+import { isValidBpm } from "../tags/bpm-value.js";
 import { HEAD_BATCH_CAP } from "../api/proxy-batch.js";
 import { get, put, putMany, saveSetting, STORES } from "../store/db.js";
 import { loadSession } from "../player/player-state.js";
@@ -46,6 +47,9 @@ let rocznikWheelRef = /** @type {any} */ (null);
 
 /** Timer komunikatu o nieudanym zapisie. */
 let ratingNoteTimer = /** @type {any} */ (null);
+
+/** Timer odświeżenia sorta Tempo po doreadzie BPM (throttle). */
+let tempoRefreshTimer = /** @type {any} */ (null);
 
 /** Hak `window.flush` ustawiony przez bieżący mount (sprzątany przy unmount). */
 let flushGlobalRef = /** @type {(() => Promise<any>) | null} */ (null);
@@ -258,6 +262,7 @@ export async function mountLibraryView({
   onPlaylist,
   onError,
   onRatingChange,
+  onBpmChange,
   ratingIO,
 }) {
   if (mounted) return;
@@ -386,7 +391,11 @@ export async function mountLibraryView({
           ratings.set(key, rec);
         }
         refreshRowStars(key);
+        refreshRowBpm(key);
+        // Tag read może odkryć BPM — player pokazuje wartość dla bieżącego Utworu.
+        onBpmChange?.(key, { bpm: getBpm(key), pending: false });
         updateCounter();
+        scheduleTempoUpdate();
       },
     });
     tagControllerRef = c;
@@ -409,11 +418,18 @@ export async function mountLibraryView({
         if (state.pending) pendingKeys.add(key);
         else pendingKeys.delete(key);
         refreshRowStars(key);
+        refreshRowBpm(key);
         updateCounter();
         onRatingChange?.(key, state);
         if (state.error) showRatingError(state.error);
         else if (state.info) showRatingNote(state.info);
         else if (state.queued) showRatingNote("Rating queued — will retry when online.");
+      },
+      onBpmChange: (key, state) => {
+        refreshRowBpm(key);
+        scheduleTempoUpdate();
+        onBpmChange?.(key, state);
+        if (state.error) showRatingNote(`Tempo not saved: ${state.error.message}`);
       },
       fetchBytes: ratingIO?.fetchBytes,
       statFile: ratingIO?.statFile,
@@ -619,6 +635,7 @@ export async function mountLibraryView({
 
     const bpm = document.createElement("span");
     bpm.className = "row-bpm slot col-tempo";
+    applyRowBpm(bpm, track.key);
 
     const lastPlayed = document.createElement("span");
     lastPlayed.className = "row-last slot col-played";
@@ -652,6 +669,23 @@ export async function mountLibraryView({
       if (el.dataset.key !== key) continue;
       const stars = el.querySelector(".row-stars");
       if (stars) applyRowStars(/** @type {HTMLElement} */ (stars), key);
+    }
+  }
+
+  /** BPM wiersza z cache `tracks` (bilet 13); brak = pusta komórka. */
+  function applyRowBpm(/** @type {HTMLElement} */ el, /** @type {string} */ key) {
+    const bpm = ratings.get(key)?.bpm;
+    const value = isValidBpm(bpm) ? bpm : null;
+    el.textContent = value == null ? "" : String(value);
+    el.title = value == null ? "" : `${value} BPM`;
+  }
+
+  /** Odświeża komórkę BPM widocznego wiersza (po odczycie tagów / zapisie). */
+  function refreshRowBpm(/** @type {string} */ key) {
+    for (const el of listViewport.querySelectorAll(".track-row")) {
+      if (el.dataset.key !== key) continue;
+      const cell = el.querySelector(".row-bpm");
+      if (cell) applyRowBpm(/** @type {HTMLElement} */ (cell), key);
     }
   }
 
@@ -718,6 +752,34 @@ export async function mountLibraryView({
   function getRating(key) {
     const rec = ratings.get(key);
     return rec && typeof rec.rating === "number" ? rec.rating : null;
+  }
+
+  /** BPM z cache (bilet 13) — player pokazuje wartość dla bieżącego Utworu. */
+  function getBpm(key) {
+    const rec = ratings.get(key);
+    return isValidBpm(rec?.bpm) ? rec.bpm : null;
+  }
+
+  /**
+   * Zapis BPM wystukanego w playerze (bilet 13) — tym samym przepływem co Ocena.
+   * @param {string} key
+   * @param {number} bpm
+   * @returns {boolean}
+   */
+  function setBpm(key, bpm) {
+    const track = library.tracks.find((t) => t.key === key);
+    if (!track) return false;
+    if (!ratingController) {
+      showRatingError(new Error("not connected to pCloud"));
+      return false;
+    }
+    try {
+      ratingController.setBpm(track, bpm);
+      return true;
+    } catch (err) {
+      showRatingError(err instanceof Error ? err : new Error(String(err)));
+      return false;
+    }
   }
 
   /** Czy Ocena czeka w `pending-ratings` (⏳ w wierszu i w playerze). */
@@ -869,6 +931,18 @@ export async function mountLibraryView({
     }
   }
 
+  /**
+   * Po doreadzie BPM lista w trybie Tempo musi się przestawić; batchowy odczyt
+   * tagów dostarcza wartości seriami, więc odświeżamy rzadko (throttle 200 ms).
+   */
+  function scheduleTempoUpdate() {
+    if (sortMode !== "tempo-asc" && sortMode !== "tempo-desc") return;
+    if (tempoRefreshTimer) return;
+    tempoRefreshTimer = setTimeout(() => {
+      tempoRefreshTimer = null;
+      update();
+    }, 200);
+  }
 
   function update() {
     filtered = sortTracks(filteredTracks(), sortMode, ratings);
@@ -956,7 +1030,7 @@ export async function mountLibraryView({
     } finally {
       if (mounted) chip.disabled = false;
     }
-  })
+  });
 
   renderSidebar();
   renderHeader();
@@ -1019,6 +1093,10 @@ export async function mountLibraryView({
     rate: rateKey,
     /** Ocena z cache w pamięci (player wyświetla gwiazdki). */
     getRating,
+    /** BPM z cache (player wyświetla tempo). */
+    getBpm,
+    /** Zapis BPM z TAP-a (bilet 13). */
+    setBpm,
     /** Czy Ocena czeka w kolejce (⏳, bilet #9). */
     isPending,
     /** Flush `pending-ratings` (bilet #9). */
@@ -1036,6 +1114,8 @@ export function unmountLibraryView() {
   ratingKeyHandlerRef = null;
   if (ratingNoteTimer) clearTimeout(ratingNoteTimer);
   ratingNoteTimer = null;
+  if (tempoRefreshTimer) clearTimeout(tempoRefreshTimer);
+  tempoRefreshTimer = null;
   if (searchDebounceRef) clearTimeout(searchDebounceRef);
   searchDebounceRef = null;
   if (rocznikWheelRef) {

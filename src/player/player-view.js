@@ -5,6 +5,7 @@
 // obok aktualny czas.
 
 import { createPlayer, loadSession } from "./player-state.js";
+import { createTapTempo } from "./tap-tempo.js";
 import { fetchTrackBlob } from "../api/worker-proxy.js";
 import { createStarControl } from "../ratings/star-control.js";
 import { isEditableTarget } from "../ui/keyboard.js";
@@ -24,6 +25,9 @@ export function formatTime(sec) {
  *   onTrackChange?: (t: any) => void, getRating?: (key: string) => number | null,
  *   isPending?: (key: string) => boolean,
  *   onRate?: (track: any, stars: number) => void,
+ *   getBpm?: (key: string) => number | null,
+ *   onBpm?: (track: any, bpm: number) => void,
+ *   tapNow?: () => number, bpmSaveDelayMs?: number,
  *   onNextUnrated?: () => boolean }} opts
  */
 export function mountPlayer({
@@ -39,6 +43,10 @@ export function mountPlayer({
   getRating,
   isPending,
   onRate,
+  getBpm,
+  onBpm,
+  tapNow,
+  bpmSaveDelayMs = 600,
   onNextUnrated,
 }) {
   const host = playerEl ?? doc.getElementById("player");
@@ -63,6 +71,27 @@ export function mountPlayer({
   const stars = starsCtl.element;
   stars.id = "pstars";
   stars.title = "Rating (1–5, 0 clears)";
+
+  // TAP tempo (bilet 13, spec §5f): klik/T = tick; 3+ ticki → BPM;
+  // „↺” restartuje próbę; zapis po chwili bez tapnięć (jeden upload).
+  const btnTap = doc.createElement("button");
+  btnTap.type = "button";
+  btnTap.id = "pbtn-tap";
+  btnTap.className = "btn ghost tap-btn";
+  btnTap.title = "Tap tempo (T) — tap the beat 3+ times";
+  btnTap.textContent = "TAP";
+  const bpmLabel = doc.createElement("span");
+  bpmLabel.id = "pbpm";
+  bpmLabel.title = "Tempo (BPM)";
+  const btnTapReset = doc.createElement("button");
+  btnTapReset.type = "button";
+  btnTapReset.id = "pbtn-tap-reset";
+  btnTapReset.className = "btn ghost tap-reset";
+  btnTapReset.title = "Restart tapping";
+  btnTapReset.textContent = "↺";
+  const rateRow = doc.createElement("div");
+  rateRow.id = "prate";
+  rateRow.append(stars, btnTap, bpmLabel, btnTapReset);
 
   // Slot waveformu: placeholder — realny wave po pierwszej ocenie (bilet ocen).
   const waveSlot = doc.createElement("div");
@@ -125,12 +154,79 @@ export function mountPlayer({
   btnNextUnrated.textContent = "→ ☆";
   transport.append(btnPrev, btnPlay, btnNext, btnNextUnrated);
 
-  host.append(title, stars, waveRow, transport, note);
+  host.append(title, rateRow, waveRow, transport, note);
 
   // ── stan: playlist do transportu N/P ────────────────────────
   let playlist = /** @type {any[]} */ ([]);
   let lastStarsKey = /** @type {string | null} */ (null);
   let lastStarsRating = /** @type {number | null | undefined} */ (undefined);
+  /** Bieżący Utwór dla wyświetlacza BPM (detektor zmiany w onState). */
+  let bpmTrackKey = /** @type {string | null} */ (null);
+  /** @type {any} */
+  let bpmTrack = null;
+  const tapTempo = createTapTempo(tapNow ? { now: tapNow } : {});
+  let bpmSaveTimer = /** @type {any} */ (null);
+  let pendingBpm = /** @type {number | null} */ (null);
+
+  /** @param {number | null} bpm */
+  function renderBpm(bpm) {
+    bpmLabel.textContent = bpm ? `${bpm} BPM` : "";
+  }
+
+  /** @param {any} track */
+  function storedBpm(track) {
+    return track && getBpm ? getBpm(track.key) : null;
+  }
+
+  /** Czyści ticki i anuluje oczekujący zapis (bez zapisywania). */
+  function clearTapSession() {
+    tapTempo.reset();
+    if (bpmSaveTimer) clearTimeout(bpmSaveTimer);
+    bpmSaveTimer = null;
+    pendingBpm = null;
+  }
+
+  /** Dopisuje obliczone BPM, jeśli różni się od zapisanego. */
+  function flushPendingBpm() {
+    if (bpmSaveTimer) clearTimeout(bpmSaveTimer);
+    bpmSaveTimer = null;
+    const track = bpmTrack;
+    const value = pendingBpm;
+    pendingBpm = null;
+    if (!track || value == null || storedBpm(track) === value) return;
+    onBpm?.(track, value);
+  }
+
+  /** Retry („↺”): restart od zera, pokazuje BPM zapisany w pliku/cache. */
+  function resetTapSession() {
+    clearTapSession();
+    renderBpm(storedBpm(bpmTrack));
+  }
+
+  /** @param {any} track */
+  function switchBpmTrack(track) {
+    flushPendingBpm(); // nie gub wystukanego tempa przy zmianie Utworu
+    bpmTrack = track ?? null;
+    clearTapSession();
+    renderBpm(storedBpm(bpmTrack));
+  }
+
+  function tickTempo() {
+    if (!player.track) return;
+    const { bpm, taps } = tapTempo.tap();
+    if (bpm == null) {
+      bpmLabel.textContent = taps === 0 ? "" : "…";
+      return;
+    }
+    renderBpm(bpm);
+    pendingBpm = bpm;
+    // Zapis po pauzie dłuższej niż interwał tapanego tempa — inaczej przy
+    // wolnych tempach (<100 BPM) timer strzelałby między kolejnymi tickami.
+    const interval = 60000 / bpm;
+    const delay = Math.min(2000, Math.max(bpmSaveDelayMs, interval + 250));
+    if (bpmSaveTimer) clearTimeout(bpmSaveTimer);
+    bpmSaveTimer = setTimeout(flushPendingBpm, delay);
+  }
 
   // <audio> gra z Blob URL-a: bajty pobiera POST /stream (token w body, nigdy
   // w URL-u). Blob trzymamy do zmiany Utworu i zwalniamy w dispose.
@@ -160,6 +256,10 @@ export function mountPlayer({
       title.textContent = state.track ? state.track.name : "Nothing selected";
       btnPlay.textContent = state.playing ? "⏸" : "▶";
       const key = state.track?.key ?? null;
+      if (key !== bpmTrackKey) {
+        bpmTrackKey = key;
+        switchBpmTrack(state.track);
+      }
       const rating = key && getRating ? getRating(key) : null;
       const pending = key != null && isPending ? isPending(key) : false;
       if (key !== lastStarsKey || rating !== lastStarsRating) {
@@ -192,6 +292,8 @@ export function mountPlayer({
     btnPlay.classList.remove("pulse");
     player.toggle();
   });
+  btnTap.addEventListener("click", tickTempo);
+  btnTapReset.addEventListener("click", resetTapSession);
   btnPrev.addEventListener("click", () => void player.step(playlist, -1));
   btnNext.addEventListener("click", () => void player.step(playlist, 1));
   if (onNextUnrated) {
@@ -253,6 +355,10 @@ export function mountPlayer({
       // kolejny nieoceniony (spec §5c)
       e.preventDefault();
       onNextUnrated();
+    } else if (e.key === "t" || e.key === "T") {
+      // TAP tempo (spec §5f)
+      e.preventDefault();
+      tickTempo();
     }
   }
   doc.addEventListener("keydown", onKey);
@@ -282,6 +388,11 @@ export function mountPlayer({
       starsCtl.setRating(rating);
       starsCtl.setPending(pending);
     },
+    /** Synchronizacja BPM z optimistic/confirmed zapisem (bilet #13). */
+    setBpm(key, bpm) {
+      if (player.track?.key !== key) return;
+      renderBpm(bpm);
+    },
     /** Pełny powrót: odczyt store `session` → { trackKey, positionSec } lub null. */
     restore() {
       return loadSession(db);
@@ -289,6 +400,8 @@ export function mountPlayer({
     dispose() {
       doc.removeEventListener("keydown", onKey);
       doc.defaultView?.removeEventListener("beforeunload", onBeforeUnload);
+      flushPendingBpm(); // nie gub wystukanego tempa przy zamykaniu
+      clearTapSession();
       player.pause();
       if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
       audioObjectUrl = null;

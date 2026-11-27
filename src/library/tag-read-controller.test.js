@@ -29,6 +29,7 @@ function makeParse(overrides = {}) {
     ratingSource: null,
     rgGainDb: null,
     rgSource: null,
+    bpm: null,
     framesSeen: false,
     ...overrides,
   });
@@ -79,6 +80,7 @@ describe("visible przepływ", () => {
         ratingSource: "max",
         rgGainDb: -6.5,
         rgSource: "TXXX",
+        bpm: 128,
         framesSeen: true,
       }),
     });
@@ -90,6 +92,7 @@ describe("visible przepływ", () => {
       expect(r.rec.ratingSource).toBe("max");
       expect(r.rec.rgGainDb).toBe(-6.5);
       expect(r.rec.rgSource).toBe("TXXX");
+      expect(r.rec.bpm).toBe(128);
       expect(r.rec.tagsReadAt).toBeGreaterThan(0);
       expect(r.rec.fingerprint).toEqual(TRACKS.find((t) => t.key === r.key).fingerprint);
     }
@@ -164,6 +167,7 @@ describe("rozbieżny Fingerprint", () => {
     expect(reads[0].rec.rating).toBe(null);
     expect(reads[0].rec.ratingSource).toBe(null);
     expect(reads[0].rec.rgGainDb).toBe(null);
+    expect(reads[0].rec.bpm).toBe(null);
     // Rozbieżny Fingerprint = jak bez oceny (tickets #7): tagsReadAt też null,
     // więc kolejna sesja ponowi odczyt.
     expect(reads[0].rec.tagsReadAt).toBe(null);

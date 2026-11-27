@@ -171,6 +171,33 @@ p code {
   font-size: 13px;
 }
 
+/* ocena + TAP tempo w jednym rzędzie (bilet 13) */
+#prate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.tap-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.tap-reset {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+#pbpm {
+  min-width: 64px;
+  font-size: 12px;
+  color: var(--tx2);
+  font-variant-numeric: tabular-nums;
+}
+
 /* slot waveformu — od startu jedyny pasek scrubbingu („placeholder, po pierwszej
    ocenie" bilet 06); po pierwszej ocenie przewinie się na realny wave */
 .wave-row {
@@ -468,7 +495,6 @@ dialog#dlg-reset menu {
   outline: 2px solid var(--acc);
   outline-offset: -2px;
 }
-
 
 /* ── lista: nagłówek kolumn sortowalnych + wiersze na wspólnej siatce ── */
 

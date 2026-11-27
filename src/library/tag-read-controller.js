@@ -221,6 +221,7 @@ export function createTagReadController({
       ratingSource: diverged ? null : (tags.ratingSource ?? prev?.ratingSource ?? null),
       rgGainDb: diverged ? null : (tags.rgGainDb ?? prev?.rgGainDb ?? null),
       rgSource: diverged ? null : (tags.rgSource ?? prev?.rgSource ?? null),
+      bpm: diverged ? null : (tags.bpm ?? prev?.bpm ?? null),
       tagsReadAt: diverged ? null : now(), // rozbieżność → re-read następnej sesji
     };
     if (prev && "lastPlayed" in prev) record.lastPlayed = prev.lastPlayed;

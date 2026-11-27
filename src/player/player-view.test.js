@@ -319,3 +319,134 @@ describe("mountPlayer — „→ ☆” (bilet 12)", () => {
     expect(() => document.getElementById("pbtn-next-unrated").click()).not.toThrow();
   });
 });
+
+// ── Bilet 13: TAP tempo (wystukanie → BPM → zapis) ──────────────────────────
+
+describe("mountPlayer — TAP tempo (bilet 13)", () => {
+  it("3 ticki co 500 ms → 120 BPM na wyświetlaczu i zapis przez onBpm", async () => {
+    let t = 0;
+    const saved = [];
+    const view = mount({
+      tapNow: () => t,
+      bpmSaveDelayMs: 5,
+      onBpm: (track, bpm) => saved.push([track.key, bpm]),
+    });
+    await view.play(TRACK);
+    const tap = document.getElementById("pbtn-tap");
+    for (let i = 0; i < 3; i++) {
+      tap.click();
+      t += 500;
+    }
+    expect(document.getElementById("pbpm").textContent).toBe("120 BPM");
+    await new Promise((r) => setTimeout(r, 900));
+    expect(saved).toEqual([["pcloud|1", 120]]);
+  });
+
+  it("mniej niż 3 ticki nie daje BPM i nic nie zapisuje", async () => {
+    let t = 0;
+    const saved = [];
+    const view = mount({
+      tapNow: () => t,
+      bpmSaveDelayMs: 5,
+      onBpm: (track, bpm) => saved.push([track.key, bpm]),
+    });
+    await view.play(TRACK);
+    document.getElementById("pbtn-tap").click();
+    t += 500;
+    document.getElementById("pbtn-tap").click();
+    expect(document.getElementById("pbpm").textContent).not.toContain("BPM");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(saved).toEqual([]);
+  });
+
+  it("reset restartuje od zera (retry) i anuluje oczekujący zapis", async () => {
+    let t = 0;
+    const saved = [];
+    const view = mount({
+      tapNow: () => t,
+      bpmSaveDelayMs: 5,
+      onBpm: (track, bpm) => saved.push([track.key, bpm]),
+    });
+    await view.play(TRACK);
+    const tap = document.getElementById("pbtn-tap");
+    for (let i = 0; i < 3; i++) {
+      tap.click();
+      t += 500;
+    }
+    document.getElementById("pbtn-tap-reset").click();
+    expect(document.getElementById("pbpm").textContent).toBe("");
+    await new Promise((r) => setTimeout(r, 900));
+    expect(saved).toEqual([]);
+  });
+
+  it("klawisz T jest tickiem, a zmiana Utworu pokazuje BPM z cache i czyści sesję", async () => {
+    let t = 0;
+    const view = mount({
+      tapNow: () => t,
+      bpmSaveDelayMs: 5,
+      onBpm: () => {},
+      getBpm: (key) => (key === "pcloud|2" ? 90 : null),
+    });
+    await view.play(TRACK);
+    document.getElementById("pbtn-tap").click();
+    t += 500;
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
+    expect(document.getElementById("pbpm").textContent).not.toContain("BPM");
+
+    await view.play(TRACK2);
+    expect(document.getElementById("pbpm").textContent).toBe("90 BPM");
+  });
+
+  it("setBpm(key, bpm) synchronizuje wyświetlacz tylko dla bieżącego Utworu", async () => {
+    const view = mount({ getBpm: () => null });
+    await view.play(TRACK);
+    view.setBpm("pcloud|2", 140);
+    expect(document.getElementById("pbpm").textContent).toBe("");
+    view.setBpm("pcloud|1", 140);
+    expect(document.getElementById("pbpm").textContent).toBe("140 BPM");
+  });
+});
+
+describe("mountPlayer — TAP tempo: granice zapisu (bilet 13)", () => {
+  it("wolne tempo (<100 BPM) nie zapisuje w połowie sesji", async () => {
+    let t = 0;
+    const saved = [];
+    const view = mount({
+      tapNow: () => t,
+      bpmSaveDelayMs: 5,
+      onBpm: (track, bpm) => saved.push([track.key, bpm]),
+    });
+    await view.play(TRACK);
+    const tap = document.getElementById("pbtn-tap");
+    for (let i = 0; i < 3; i++) {
+      tap.click();
+      t += 667;
+    }
+    expect(document.getElementById("pbpm").textContent).toBe("90 BPM");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(saved).toEqual([]); // jeszcze nie minął interwał 90 BPM
+    tap.click();
+    t += 667;
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(saved).toEqual([["pcloud|1", 90]]);
+  });
+
+  it("zmiana Utworu zapisuje oczekujące BPM poprzedniego", async () => {
+    let t = 0;
+    const saved = [];
+    const view = mount({
+      tapNow: () => t,
+      bpmSaveDelayMs: 60_000, // timer nie zdąży — zapis wymuszony zmianą Utworu
+      onBpm: (track, bpm) => saved.push([track.key, bpm]),
+    });
+    await view.play(TRACK);
+    const tap = document.getElementById("pbtn-tap");
+    for (let i = 0; i < 3; i++) {
+      tap.click();
+      t += 500;
+    }
+    await view.play(TRACK2);
+    expect(saved).toEqual([["pcloud|1", 120]]);
+    expect(document.getElementById("pbpm").textContent).toBe("");
+  });
+});

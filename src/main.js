@@ -79,7 +79,7 @@ async function boot() {
       // Transport N/P zmienia Utwór w playerze (inny stan niż zaznaczenie
       // listy) — sync przez onTrackChange → library-view.selectKey.
       let notifyTrackChange = /** @type {((t: any) => void) | null} */ (null);
-      /** @type {{ selectKey: (key: string) => boolean, rate: (key: string, stars: 1|2|3|4|5|null) => boolean, getRating: (key: string) => number | null, isPending?: (key: string) => boolean, flush?: () => Promise<any> } | undefined} */
+      /** @type {{ selectKey: (key: string) => boolean, rate: (key: string, stars: 1|2|3|4|5|null) => boolean, getRating: (key: string) => number | null, getBpm?: (key: string) => number | null, setBpm?: (key: string, bpm: number) => boolean, isPending?: (key: string) => boolean, flush?: () => Promise<any> } | undefined} */
       let libraryApi;
       const player =
         creds?.token && creds?.hostname
@@ -89,9 +89,13 @@ async function boot() {
               hostname: creds.hostname,
               onTrackChange: (t) => notifyTrackChange?.(t),
               getRating: (key) => libraryApi?.getRating(key) ?? null,
+              getBpm: (key) => libraryApi?.getBpm?.(key) ?? null,
               isPending: (key) => libraryApi?.isPending?.(key) ?? false,
               onRate: (track, stars) => {
                 libraryApi?.rate(track.key, /** @type {1|2|3|4|5} */ (stars));
+              },
+              onBpm: (track, bpm) => {
+                libraryApi?.setBpm?.(track.key, bpm);
               },
               onNextUnrated: () => libraryApi?.playNextUnrated?.() ?? false,
             })
@@ -108,6 +112,7 @@ async function boot() {
         onPlaylist: player ? (tracks) => player.setPlaylist(tracks) : undefined,
         onRatingChange: (key, state) =>
           player?.setRating(key, state.rating, state.pending ?? false),
+        onBpmChange: (key, state) => player?.setBpm(key, state.bpm),
       })
         .then((api) => {
           libraryApi = api;

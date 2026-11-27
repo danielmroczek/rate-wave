@@ -695,3 +695,121 @@ describe("mountLibraryView — „→ ☆” (bilet 12)", () => {
     restoreHeight.mockRestore();
   });
 });
+
+// ── Bilet 13: BPM w liście + zapis TAP tempo ───────────────────────────────
+
+/** Wartość TXXX `bpm` z bufora uploadu (null = brak). */
+function bpmOf(bytes) {
+  const size =
+    ((bytes[6] & 0x7f) << 21) |
+    ((bytes[7] & 0x7f) << 14) |
+    ((bytes[8] & 0x7f) << 7) |
+    (bytes[9] & 0x7f);
+  let p = 10;
+  while (p + 10 <= 10 + size) {
+    const id = String.fromCharCode(...bytes.subarray(p, p + 4));
+    if (!/^[A-Z0-9]{4}$/.test(id)) break;
+    const len =
+      ((bytes[p + 4] << 24) | (bytes[p + 5] << 16) | (bytes[p + 6] << 8) | bytes[p + 7]) >>> 0;
+    if (id === "TXXX") {
+      const body = bytes.subarray(p + 10, p + 10 + len);
+      const z = body.indexOf(0, 1);
+      if (String.fromCharCode(...body.subarray(1, z)).toLowerCase() === "bpm") {
+        const end = body.indexOf(0, z + 1);
+        return Number(String.fromCharCode(...body.subarray(z + 1, end < 0 ? undefined : end)));
+      }
+    }
+    p += 10 + len;
+  }
+  return null;
+}
+
+describe("mountLibraryView — BPM (bilet 13)", () => {
+  it("rekord z BPM → kolumna Tempo w wierszu; api.getBpm zwraca wartość", async () => {
+    const restoreHeight = stubListHeight();
+    await seedCache(db);
+    await put(db, STORES.TRACKS, "pcloud|900", {
+      fingerprint: { size: 1, modified: 1 },
+      rating: 3,
+      bpm: 128,
+      tagsReadAt: 7,
+    });
+    const api = await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+    });
+    expect(api.getBpm("pcloud|900")).toBe(128);
+    const row = document.querySelector('.track-row[data-key="pcloud|900"]');
+    const cell = row.querySelector(".row-bpm");
+    expect(cell.textContent).toBe("128");
+    expect(cell.title).toBe("128 BPM");
+    restoreHeight.mockRestore();
+  });
+
+  it("api.setBpm → optimistic w wierszu, upload z TXXX bpm i callback", async () => {
+    const restoreHeight = stubListHeight();
+    await seedCache(db);
+    await put(db, STORES.TRACKS, "pcloud|900", {
+      fingerprint: { size: 1, modified: 1 },
+      rating: 3,
+      bpm: null,
+      tagsReadAt: 7,
+    });
+    const uploads = [];
+    const bpmChanges = [];
+    const api = await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+      onBpmChange: (key, state) => bpmChanges.push({ key, ...state }),
+      ratingIO: {
+        fetchBytes: async () => MP3_BYTES,
+        upload: async ({ filename, bytes }) => {
+          uploads.push({ filename, bytes });
+          return { fileid: 900, name: filename, size: bytes.length, modified: 20 };
+        },
+        now: () => 7,
+      },
+    });
+
+    const row = document.querySelector('.track-row[data-key="pcloud|900"]');
+    expect(api.setBpm("pcloud|900", 120)).toBe(true);
+    expect(api.getBpm("pcloud|900")).toBe(120);
+    expect(row.querySelector(".row-bpm").textContent).toBe("120");
+    expect(bpmChanges[0]).toMatchObject({ key: "pcloud|900", bpm: 120, pending: true });
+
+    await waitFor(() => uploads.length === 1);
+    expect(bpmOf(uploads[0].bytes)).toBe(120);
+    const rec = await get(db, STORES.TRACKS, "pcloud|900");
+    expect(rec.bpm).toBe(120);
+    expect(bpmChanges.some((c) => c.pending === false && c.bpm === 120)).toBe(true);
+    restoreHeight.mockRestore();
+  });
+
+  it("sort Tempo ↑/↓ używa BPM z cache (bez BPM na końcu)", async () => {
+    const restoreHeight = stubListHeight();
+    await seedCache(db);
+    await put(db, STORES.TRACKS, "pcloud|900", { bpm: 140 });
+    await put(db, STORES.TRACKS, "pcloud|901", { bpm: 80 });
+    await mountLibraryView({
+      db,
+      pcloudApi: makeApi(),
+      token: "t",
+      hostname: "eapi.pcloud.com",
+    });
+    const rowKeys = () => [...document.querySelectorAll(".track-row")].map((r) => r.dataset.key);
+
+    const tempo = [...document.querySelectorAll("#list-header .col-sort")].find(
+      (b) => b.dataset.col === "tempo",
+    );
+    tempo.click(); // Tempo ↑ — wolniejsze (80) najpierw
+    expect(rowKeys()).toEqual(["pcloud|901", "pcloud|900"]);
+    tempo.click(); // Tempo ↓
+    expect(rowKeys()).toEqual(["pcloud|900", "pcloud|901"]);
+    expect(tempo.getAttribute("aria-sort")).toBe("descending");
+    restoreHeight.mockRestore();
+  });
+});
