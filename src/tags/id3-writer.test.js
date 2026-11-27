@@ -1,7 +1,7 @@
 // ID3v2.3 rewrite oceny (bilet #8, spec §2a; szablon zachowania z testu T7).
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { rewriteId3Rating, WMP_OWNER } from "./id3-writer.js";
+import { rewriteId3Rating, rewriteId3Tags, WMP_OWNER } from "./id3-writer.js";
 
 const OLD_WMP_BODY = [...latin1(WMP_OWNER + "\0"), 196, 0, 0, 0, 0];
 const FOREIGN_BODY = [...latin1("MusicBee\0"), 64];
@@ -187,6 +187,107 @@ describe("rewriteId3Rating — usuwanie oceny", () => {
     expect(readFrames(out.bytes).frames.filter((f) => f.id === "POPM")).toHaveLength(0);
     expect(out.rating).toBe(null);
     expect(out.ratingSource).toBe(null);
+  });
+});
+
+/** @param {string} description @param {string} value → body TXXX (Latin-1) */
+function buildTxxx(description, value) {
+  return bytes([0], latin1(description), [0], latin1(value));
+}
+
+/** @param {Uint8Array} body TXXX body → { description, value } */
+function readTxxx(body) {
+  const z = body.indexOf(0, 1);
+  return {
+    encoding: body[0],
+    description: String.fromCharCode(...body.subarray(1, z)),
+    value: String.fromCharCode(...body.subarray(z + 1)),
+  };
+}
+
+describe("rewriteId3Tags — TAP tempo (TXXX bpm, bilet 13)", () => {
+  it("zapisuje TXXX z description „bpm” (małe litery) i wartością int", () => {
+    const original = bytes(id3Tag([frame("TXXX", TXXX_RG_BODY)]), AUDIO);
+    const out = rewriteId3Tags(original, { bpm: 123 });
+    const parsed = readFrames(out.bytes);
+    const tx = parsed.frames.filter((f) => f.id === "TXXX").map((f) => readTxxx(f.body));
+    const bpm = tx.find((f) => f.description === "bpm");
+    expect(bpm).toEqual({ encoding: 0, description: "bpm", value: "123" });
+    expect(out.bpm).toBe(123);
+    // ReplayGain nietknięty.
+    expect(tx.some((f) => f.description === "replaygain_track_gain")).toBe(true);
+    expect([...out.bytes.subarray(parsed.end)]).toEqual(AUDIO);
+  });
+
+  it("ponowny zapis podmienia istniejącą ramkę bpm — dokładnie jedna, bez duplikatu", () => {
+    const original = bytes(id3Tag([frame("TXXX", buildTxxx("bpm", "90"))]), AUDIO);
+    const out = rewriteId3Tags(original, { bpm: 128 });
+    const tx = readFrames(out.bytes)
+      .frames.filter((f) => f.id === "TXXX")
+      .map((f) => readTxxx(f.body));
+    const bpmFrames = tx.filter((f) => f.description.toLowerCase() === "bpm");
+    expect(bpmFrames).toHaveLength(1);
+    expect(bpmFrames[0].value).toBe("128");
+    expect(out.bpm).toBe(128);
+  });
+
+  it("opis bpm dopasowany case-insensitive (np. BPM z innego taggera)", () => {
+    const original = bytes(id3Tag([frame("TXXX", buildTxxx("bpm", "90"))]), AUDIO);
+    const out = rewriteId3Tags(original, { bpm: 100 });
+    const bpmFrames = readFrames(out.bytes)
+      .frames.filter((f) => f.id === "TXXX")
+      .map((f) => readTxxx(f.body))
+      .filter((f) => f.description.toLowerCase() === "bpm");
+    expect(bpmFrames).toHaveLength(1);
+    expect(bpmFrames[0].value).toBe("100");
+  });
+
+  it("bpm null usuwa własną ramkę, reszta tagu zostaje", () => {
+    const original = bytes(
+      id3Tag([frame("TXXX", buildTxxx("bpm", "120")), frame("TXXX", TXXX_RG_BODY)]),
+      AUDIO,
+    );
+    const out = rewriteId3Tags(original, { bpm: null });
+    const tx = readFrames(out.bytes)
+      .frames.filter((f) => f.id === "TXXX")
+      .map((f) => readTxxx(f.body));
+    expect(tx.some((f) => f.description.toLowerCase() === "bpm")).toBe(false);
+    expect(tx.some((f) => f.description === "replaygain_track_gain")).toBe(true);
+    expect(out.bpm).toBe(null);
+  });
+
+  it("ocena i bpm w jednym rewrite: POPM WMP + TXXX bpm, cudze ramki nietknięte", () => {
+    const original = bytes(
+      id3Tag([
+        frame("POPM", OLD_WMP_BODY),
+        frame("POPM", FOREIGN_BODY),
+        frame("TXXX", TXXX_RG_BODY),
+      ]),
+      AUDIO,
+    );
+    const out = rewriteId3Tags(original, { stars: 4, bpm: 87 });
+    const parsed = readFrames(out.bytes);
+    const popms = parsed.frames.filter((f) => f.id === "POPM").map((f) => popmBody(f.body));
+    expect(popms.find((p) => p.owner === WMP_OWNER)?.rating).toBe(196);
+    expect(popms.some((p) => p.owner === "MusicBee")).toBe(true);
+    expect(out.rating).toBe(4);
+    expect(out.bpm).toBe(87);
+    expect([...out.bytes.subarray(parsed.end)]).toEqual(AUDIO);
+  });
+
+  it("plik bez tagu + bpm → nowy ID3v2.3 z TXXX bpm, audio nietknięte", () => {
+    const out = rewriteId3Tags(bytes(AUDIO), { bpm: 111 });
+    const parsed = readFrames(out.bytes);
+    expect(parsed.major).toBe(3);
+    const tx = parsed.frames.map((f) => readTxxx(f.body));
+    expect(tx).toEqual([{ encoding: 0, description: "bpm", value: "111" }]);
+    expect([...out.bytes.subarray(parsed.end)]).toEqual(AUDIO);
+  });
+
+  it("bez stars/bpm nic nie zmienia (rewrite zachowawczy)", () => {
+    const original = bytes(id3Tag([frame("TXXX", TXXX_RG_BODY)]), AUDIO);
+    const out = rewriteId3Tags(original, {});
+    expect([...out.bytes]).toEqual([...original]);
   });
 });
 

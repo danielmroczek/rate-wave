@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from "vitest";
 import { parseHead } from "./id3-parser.js";
+import { rewriteId3Tags } from "./id3-writer.js";
 import { makeId3Head, popmBody, txxxBody, rva2Body, rvadBody } from "./test-heads.js";
 
 describe("parseHead — POPM", () => {
@@ -61,6 +62,39 @@ describe("parseHead — ReplayGain", () => {
     const r = await parseHead(bytes);
     expect(r.rgSource).toBe("RVA2");
     expect(r.rgGainDb).toBeCloseTo(-2, 2);
+  });
+
+  it("TXXX bpm → liczba całkowita (opis case-insensitive)", async () => {
+    const bytes = makeId3Head(3, [{ id: "TXXX", body: txxxBody("bpm", "128") }]);
+    const r = await parseHead(bytes);
+    expect(r).toMatchObject({ bpm: 128, framesSeen: true });
+  });
+
+  it("TXXX BPM z wartością „120 BPM”/dziesiętną → zaokrąglone int", async () => {
+    const bytes = makeId3Head(3, [
+      { id: "TXXX", body: txxxBody("BPM", "120 BPM") },
+      { id: "TXXX", body: txxxBody("bpm", "99.6") },
+    ]);
+    const r = await parseHead(bytes);
+    expect(r.bpm).toBe(120); // pierwsza ramka bpm wygrywa
+  });
+
+  it("bpm i ReplayGain współistnieją w jednym odczycie", async () => {
+    const bytes = makeId3Head(3, [
+      { id: "TXXX", body: txxxBody("replaygain_track_gain", "-6.5 dB") },
+      { id: "TXXX", body: txxxBody("bpm", "90") },
+    ]);
+    const r = await parseHead(bytes);
+    expect(r).toMatchObject({ rgGainDb: -6.5, bpm: 90, framesSeen: true });
+  });
+
+  it("round-trip: TXXX bpm zapisany przez writer czyta music-metadata", async () => {
+    const original = makeId3Head(3, [
+      { id: "POPM", body: popmBody("Windows Media Player 9 Series", 128) },
+    ]);
+    const out = rewriteId3Tags(original, { bpm: 117 });
+    const r = await parseHead(out.bytes);
+    expect(r).toMatchObject({ bpm: 117, rating: 3, ratingSource: "WMP", framesSeen: true });
   });
 
   it("TXXX ma pierwszeństwo przed RVA2", async () => {

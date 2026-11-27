@@ -7,9 +7,13 @@
 // zachowany, gdy nowa treść się mieści — audio zostaje pod tym samym offsetem.
 
 import { isWmpSource, pickRating } from "./rating-byte.js";
+import { isValidBpm, parseBpmValue } from "./bpm-value.js";
 
 /** Owner ramki WMP (Latin-1, bez `@` — to nie adres e-mail). */
 export const WMP_OWNER = "Windows Media Player 9 Series";
+
+/** Description ramki TXXX z tempem (małe litery — spójnie z replaygain). */
+export const BPM_TXXX_DESCRIPTION = "bpm";
 
 /** Skala WMP: gwiazdki → bajt ratingu POPM. */
 export const WMP_RATING_BYTES = Object.freeze({ 1: 1, 2: 64, 3: 128, 4: 196, 5: 255 });
@@ -69,6 +73,88 @@ function latin1Decode(bytes) {
   let s = "";
   for (const b of bytes) s += String.fromCharCode(b);
   return s;
+}
+
+/**
+ * Rozbija body TXXX na [description, value], respektując bajt kodowania
+ * (0 = Latin-1, 1 = UTF-16 z BOM, 2 = UTF-16BE, 3 = UTF-8).
+ * @param {Uint8Array} body
+ * @returns {[string, string]}
+ */
+function decodeTxxxParts(body) {
+  if (body.length === 0) return ["", ""];
+  const encoding = body[0];
+  const data = body.subarray(1);
+
+  if (encoding === 1 || encoding === 2) {
+    let start = 0;
+    let littleEndian = encoding === 1;
+    if (encoding === 1 && data.length >= 2) {
+      if (data[0] === 0xff && data[1] === 0xfe) {
+        littleEndian = true;
+        start = 2;
+      } else if (data[0] === 0xfe && data[1] === 0xff) {
+        littleEndian = false;
+        start = 2;
+      }
+    }
+    const units = [];
+    for (let i = start; i + 1 < data.length; i += 2) {
+      units.push(littleEndian ? data[i] | (data[i + 1] << 8) : (data[i] << 8) | data[i + 1]);
+    }
+    let split = units.indexOf(0);
+    if (split < 0) split = units.length;
+    const decode = (/** @type {number[]} */ list) => String.fromCharCode(...list);
+    const valueUnits = units.slice(split + 1);
+    const valueEnd = valueUnits.indexOf(0);
+    return [
+      decode(units.slice(0, split)),
+      decode(valueEnd < 0 ? valueUnits : valueUnits.slice(0, valueEnd)),
+    ];
+  }
+
+  const z = data.indexOf(0);
+  const descBytes = z < 0 ? data : data.subarray(0, z);
+  const valueBytes = z < 0 ? new Uint8Array(0) : data.subarray(z + 1);
+  const vEnd = valueBytes.indexOf(0);
+  const valueSlice = vEnd < 0 ? valueBytes : valueBytes.subarray(0, vEnd);
+  if (encoding === 3) {
+    const dec = new TextDecoder("utf-8");
+    return [dec.decode(descBytes), dec.decode(valueSlice)];
+  }
+  return [latin1Decode(descBytes), latin1Decode(valueSlice)];
+}
+
+/** @param {Uint8Array} body @returns {boolean} */
+function isBpmTxxx(body) {
+  return decodeTxxxParts(body)[0].trim().toLowerCase() === BPM_TXXX_DESCRIPTION;
+}
+
+/**
+ * Wartość TXXX bpm → int albo null.
+ * @param {Uint8Array} body
+ * @returns {number | null}
+ */
+function bpmFromTxxx(body) {
+  const [description, text] = decodeTxxxParts(body);
+  if (description.trim().toLowerCase() !== BPM_TXXX_DESCRIPTION) return null;
+  return parseBpmValue(text);
+}
+
+/**
+ * Body TXXX: kodowanie ISO-8859-1, description + NUL, wartość (+ NUL).
+ * @param {string} description
+ * @param {string} value
+ */
+function buildTxxxBody(description, value) {
+  const desc = latin1Encode(description);
+  const val = latin1Encode(value);
+  const body = new Uint8Array(1 + desc.length + 1 + val.length);
+  body[0] = 0;
+  body.set(desc, 1);
+  body[desc.length + 1] = 0;
+  body.set(val, desc.length + 2);
+  return body;
 }
 
 /**
@@ -147,38 +233,66 @@ export function parseId3Tag(bytes) {
 }
 
 /**
- * Ustawia (stars 1–5) albo usuwa (null) ocenę w ramce WMP, zostawiając resztę
- * tagu i audio nietknięte. Zwraca też ocenę efektywną wg hierarchii odczytu
- * (po usunięciu WMP może wygrać cudza ramka).
+ * Przepisuje tag ID3: ocena (POPM WMP) i/lub BPM (TXXX `bpm`) — pola, których
+ * nie podano, zostają nietknięte; `null` usuwa. Reszta ramek i audio bez zmian.
+ * Zwraca też wartości efektywne po zapisie (ocena wg hierarchii odczytu).
  *
  * @param {Uint8Array} bytes
- * @param {{ stars: 1|2|3|4|5|null }} opts
- * @returns {{ bytes: Uint8Array, rating: number | null, ratingSource: "WMP" | "max" | null }}
+ * @param {{ stars?: 1|2|3|4|5|null, bpm?: number|null }} [opts]
+ * @returns {{ bytes: Uint8Array, rating: number | null, ratingSource: "WMP" | "max" | null, bpm: number | null }}
  */
-export function rewriteId3Rating(bytes, { stars }) {
-  const byte = starsToByte(stars);
+export function rewriteId3Tags(bytes, { stars, bpm } = {}) {
+  const setStars = stars !== undefined;
+  const setBpm = bpm !== undefined;
+  const byte = setStars ? starsToByte(stars ?? null) : null;
+  if (setBpm && bpm != null && !isValidBpm(bpm)) {
+    throw new RangeError(`rewriteId3Tags: invalid bpm ${bpm}`);
+  }
   const tag = parseId3Tag(bytes);
-
-  if (!tag.has && byte == null) {
-    return { bytes, rating: null, ratingSource: null };
+  if (!tag.has && !(setStars && byte != null) && !(setBpm && bpm != null)) {
+    return { bytes, rating: null, ratingSource: null, bpm: null };
   }
 
   /** @type {Id3Frame[]} */
   const kept = [];
-  let insertAt = -1;
+  let popmPlaced = false;
+  let bpmPlaced = false;
   for (const frame of tag.frames) {
-    const info = frame.id === "POPM" ? popmInfo(frame.body) : null;
-    if (info && isWmpSource(info.owner)) {
-      if (insertAt < 0) insertAt = kept.length;
+    if (setStars && frame.id === "POPM") {
+      const info = popmInfo(frame.body);
+      if (info && isWmpSource(info.owner)) {
+        // Podmiana w miejscu pierwszej ramki WMP (kolejność ramek zachowana).
+        if (!popmPlaced) {
+          if (byte != null) kept.push({ id: "POPM", flags: [0, 0], body: buildPopmBody(byte) });
+          popmPlaced = true;
+        }
+        continue;
+      }
+    }
+    if (setBpm && frame.id === "TXXX" && isBpmTxxx(frame.body)) {
+      if (!bpmPlaced) {
+        if (bpm != null) {
+          kept.push({
+            id: "TXXX",
+            flags: [0, 0],
+            body: buildTxxxBody(BPM_TXXX_DESCRIPTION, String(bpm)),
+          });
+        }
+        bpmPlaced = true;
+      }
       continue;
     }
     kept.push(frame);
   }
-
-  if (byte != null) {
-    const replacement = { id: "POPM", flags: [0, 0], body: buildPopmBody(byte) };
-    if (insertAt >= 0) kept.splice(insertAt, 0, replacement);
-    else kept.push(replacement);
+  if (setStars && byte != null && !popmPlaced) {
+    kept.push({ id: "POPM", flags: [0, 0], body: buildPopmBody(byte) });
+  }
+  if (setBpm && bpm != null && !bpmPlaced) {
+    kept.push({
+      id: "TXXX",
+      flags: [0, 0],
+      body: buildTxxxBody(BPM_TXXX_DESCRIPTION, String(bpm)),
+    });
   }
 
   const popms = kept
@@ -190,6 +304,16 @@ export function rewriteId3Rating(bytes, { stars }) {
       rating: /** @type {PopmInfo} */ (info).rating,
     }));
   const effective = pickRating(popms);
+
+  let effectiveBpm = null;
+  for (const f of kept) {
+    if (f.id !== "TXXX") continue;
+    const value = bpmFromTxxx(f.body);
+    if (value != null) {
+      effectiveBpm = value;
+      break;
+    }
+  }
 
   const framesSize = kept.reduce((n, f) => n + 10 + f.body.length, 0);
   const available = tag.has ? tag.end - 10 : 0;
@@ -231,5 +355,18 @@ export function rewriteId3Rating(bytes, { stars }) {
     bytes: out,
     rating: effective?.stars ?? null,
     ratingSource: effective?.source ?? null,
+    bpm: effectiveBpm,
   };
+}
+
+/**
+ * Ustawia (stars 1–5) albo usuwa (null) ocenę w ramce WMP, zostawiając resztę
+ * tagu i audio nietknięte.
+ *
+ * @param {Uint8Array} bytes
+ * @param {{ stars: 1|2|3|4|5|null }} opts
+ * @returns {{ bytes: Uint8Array, rating: number | null, ratingSource: "WMP" | "max" | null, bpm: number | null }}
+ */
+export function rewriteId3Rating(bytes, { stars }) {
+  return rewriteId3Tags(bytes, { stars });
 }

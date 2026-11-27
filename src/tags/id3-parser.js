@@ -3,6 +3,7 @@
 // id3-head-worker.js; w testach bezpośrednio.
 
 import { parseBuffer } from "music-metadata";
+import { parseBpmValue } from "./bpm-value.js";
 import { pickRating } from "./rating-byte.js";
 
 /**
@@ -11,13 +12,15 @@ import { pickRating } from "./rating-byte.js";
  * @property {"WMP" | "max" | null} ratingSource
  * @property {number | null} rgGainDb — ReplayGain track gain [dB]
  * @property {"TXXX" | "RVA2" | "RVAD" | "APE" | null} rgSource
- * @property {boolean} framesSeen — czy w headzie był cokolwiek POPM/RG (decyzja o eskalacji)
+ * @property {number | null} bpm — tempo z TXXX `bpm` (int)
+ * @property {boolean} framesSeen — czy w headzie był cokolwiek POPM/RG/BPM (decyzja o eskalacji)
  */
 
 /** Regex na tekst TXXX/APE gain: „±x[.y] dB" / „±x[.y]" (bezpośrednie wartości APE). */
 const RG_DB_RE = /^([+-]?\d+(?:\.\d+)?)\s*dB$/i;
 const RG_BARE_RE = /^([+-]?\d+(?:\.\d+)?)$/;
 const RG_NAME_RE = /replaygain_track_gain/i;
+const BPM_NAME_RE = /^bpm$/i;
 
 /**
  * @param {string} text
@@ -127,6 +130,7 @@ export async function parseHead(bytes) {
     ratingSource: null,
     rgGainDb: null,
     rgSource: null,
+    bpm: null,
     framesSeen: false,
   };
   if (!bytes || bytes.length === 0) return empty;
@@ -147,17 +151,23 @@ export async function parseHead(bytes) {
 
   let rgGainDb = null;
   let rgSource = /** @type {"TXXX" | "RVA2" | "RVAD" | "APE" | null} */ (null);
+  let bpm = null;
   for (const f of frames) {
-    if (f.id === "TXXX" || f.id.startsWith("TXXX:")) {
-      const parts = txxxParts(f);
-      if (parts && RG_NAME_RE.test(parts[0])) {
-        const db = parseDbText(parts[1]);
-        if (db != null) {
-          rgGainDb = db;
-          rgSource = "TXXX";
-          break;
-        }
+    if (f.id !== "TXXX" && !f.id.startsWith("TXXX:")) continue;
+    const parts = txxxParts(f);
+    if (!parts) continue;
+    const [description, text] = parts;
+    if (rgSource === null && RG_NAME_RE.test(description)) {
+      const db = parseDbText(text);
+      if (db != null) {
+        rgGainDb = db;
+        rgSource = "TXXX";
+        continue;
       }
+    }
+    if (bpm == null && BPM_NAME_RE.test(description.trim())) {
+      const value = parseBpmValue(text);
+      if (value != null) bpm = value;
     }
   }
   if (rgSource === null) {
@@ -193,7 +203,14 @@ export async function parseHead(bytes) {
     }));
     const alt = pickRating(asFrames);
     if (alt) {
-      return { rating: alt.stars, ratingSource: alt.source, rgGainDb, rgSource, framesSeen: true };
+      return {
+        rating: alt.stars,
+        ratingSource: alt.source,
+        rgGainDb,
+        rgSource,
+        bpm,
+        framesSeen: true,
+      };
     }
   }
 
@@ -202,6 +219,7 @@ export async function parseHead(bytes) {
     ratingSource: pick?.source ?? null,
     rgGainDb,
     rgSource,
-    framesSeen: pick != null || rgSource != null,
+    bpm,
+    framesSeen: pick != null || rgSource != null || bpm != null,
   };
 }
