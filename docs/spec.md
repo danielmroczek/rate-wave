@@ -133,6 +133,7 @@ Aplikacja korzysta z tych potwierdzonych faktów (raport `research/pcloud-api.md
 
 - Następny nieoceniony: `U`; następny/poprzedni: `N`/`P`
 - Space: play/pause
+- TAP tempo: `T` (tick; `↺` w playerze restartuje próbę)
 - Gwiazdki: `1`…`5`; „wyczyść ocenę": `0`
 - Flow: strzałki na liście, Enter = wybierz/odtwórz
 - Scrub: klik/tap/drag po waveformie (seek na `duration` z `preload="metadata"` — działa niezależnie od peaks)
@@ -154,8 +155,8 @@ Aplikacja korzysta z tych potwierdzonych faktów (raport `research/pcloud-api.md
 
 ### 5f. TAP tempo (BPM) — MVP
 
-- **Przycisk w playerze** „wystukaj tempo": tap = tick; 3+ ticki → BPM = amerykańska intuicja (średnia interwału, zaokrąglenie do ±1 BPM; retry restart).
-- **Zapis BPM do pliku:** ID3 **TXXX** (details: description `bpm`; wartość jako int — format dopasować do normy — patrz **pkt 12: otwarte szczegóły**). Wpływ na cache: zmiana size/modified → unieważnienie rekordu `tracks` (naturalne — zapis tagu i tak następuje).
+- **Przycisk w playerze** „wystukaj tempo": tap = tick; 3+ ticki → BPM = amerykańska intuicja (średnia interwału, zaokrąglenie do ±1 BPM; retry restart). Zapis następuje po pauzie dłuższej niż interwał tapanego tempa (jeden upload na próbę, nie po każdym ticku).
+- **Zapis BPM do pliku:** ID3 **TXXX** — description `bpm` (małe litery), wartość jako int dziesiętnie, Latin-1 (format rozstrzygnięty, §12.1). Zapis idzie tym samym przepływem rewrite+upload co Ocena. Wpływ na cache: zmiana size/modified → unieważnienie rekordu `tracks` (naturalne — zapis tagu i tak następuje).
 - BPM widoczne w liście + sortowalne [bilet 08 fz. 5].
 
 ---
@@ -281,7 +282,7 @@ workers/
 
 ## 12. Otwarte szczegóły (do rozstrzygnięcia w fazie build, nie blokują)
 
-1. **TXXX BPM:** description (`bpm` vs `fBPM` vs `TAP-bpm`) i format wartości (int vs `a.bb`) — przyjmujemy match na najczęsty format; konsistency z TXXX replaygain (małe litery).
+1. **TXXX BPM — rozstrzygnięte (#13):** description `bpm` (małe litery — spójnie z TXXX replaygain), wartość jako liczba całkowita dziesiętnie, kodowanie Latin-1. Odczyt description case-insensitive; zapis podmienia istniejącą ramkę (bez duplikatów), a `bpm = null` ją usuwa.
 2. **Cloudflare Worker dokładna lokalizacja/passthrough** — routing do `getfilelink` passthrough i stream; hosta workera (workers.dev vs custom subdomain) zależnie od pierwszej próby. **Rozstrzygnięte (#5, #18, #20):** worker jest bezstanowy i działa z tożsamością użytkownika (passthrough); klienci JS wysyłają `access_token` w body żądania (`/getfilelink`, `/stream`, `/head`), metodą wynegocjowaną przy starcie — `QUERY`, gdy proxy ją obsługuje, inaczej `POST` (trwały fallback tylko po `405`/`501`; awaria przejściowa degraduje pojedyncze żądanie). Playback pobiera Utwór żądaniem z ciałem jako Blob i gra z Blob URL-a, więc bieżąca aplikacja nie umieszcza tokena w żadnym URL-u. Szczegóły: [ADR 0001](adr/0001-read-proxy-auth.md).
 3. **Odtwarzanie w tle na Androidzie** — Media Session API (metadane na lockscreen, sterowanie z powiadomienia) jako nice-to-have; brak blokady dla MVP.
 4. **Gold-file testy interopu** (Mp3tag/Explorer/foobar2000/Poweramp/Musicolet) — przed pierwszym realnym uploadem; plan w `research/popm-interop-matrix.md` §"Plan weryfikacji empirycznej".

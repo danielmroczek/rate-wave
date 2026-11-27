@@ -28,6 +28,10 @@ _Avoid_: gwiazdka, like, punktacja, druga ocena
 Wartość pochodna Oceny w IndexedDB (per Utwór: 1–5 albo null) — służy listowaniu, filtrowaniu i sortowaniu bez parsowania tysięcy tagów. Podporządkowany tagowi; aktualizowany razem z tagiem; unieważniany przez walidację Fingerprintu.
 _Avoid_: baza ocen, źródło ocen
 
+**BPM (Tempo)**:
+Tempo Utworu wystukane w playerze (TAP; od 3 ticków średnia interwału, ±1 BPM) i zapisane w ID3v2.3 jako `TXXX` o description `bpm` (wartość całkowita, Latin-1). Jak Ocena: źródłem prawdy jest tag w pliku, a kopia w Cache ocen (pole `bpm`) służy kolumnie Tempo i sortowaniu; zapis idzie tym samym rewrite+upload co Ocena i unieważnia Fingerprint.
+_Avoid_: BPM w bazie, metadane lokalne
+
 **Fingerprint**:
 Tani zestaw metadanych pliku (`size + lastModified` lokalnie; `size + modified` w pCloud) służący do testu tożsamości Utworu; rozbieżność unieważnia rekord cache (oceny i ReplayGain).
 _Avoid_: hash, sygnatura
